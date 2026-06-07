@@ -23,7 +23,7 @@ PALETTE = {
 INK = "#15202B"      # title / emphasis
 MUTED = "#5B6573"    # labels, ticks, subtitles
 FAINT = "#9AA3AF"    # captions
-GRID = "#ECEEF1"
+GRID = "#DCE1E7"     # subtle but visible
 
 
 def color(name: str) -> str:

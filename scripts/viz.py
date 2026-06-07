@@ -48,29 +48,80 @@ COLORS = {n: style.color(n) for n in
 FLAMEGRAPH_PL = "flamegraph.pl"
 
 
-def make_flamegraph(profile_path, out_svg, label):
+PHASE_ORDER = ["histogram", "split_find", "leaf_reduce", "gradient", "other"]
+PHASE_COLOR = {
+    "histogram": "#E8613C",    # rustwood terracotta — the hotspot
+    "split_find": "#33506B",   # slate
+    "leaf_reduce": "#5FA08C",  # teal
+    "gradient": "#B58DB6",     # mauve
+    "other": "#9AA3AF",
+}
+
+
+def _tint(hexc, f):
+    """Blend a hex color toward white by fraction f (0=orig, 1=white)."""
+    import matplotlib.colors as mc
+    r, g, b = mc.to_rgb(hexc)
+    return (r + (1 - r) * f, g + (1 - g) * f, b + (1 - b) * f)
+
+
+def make_flamegraph(profile_path, out_png, label):
+    """Native icicle/flame chart (matplotlib) matching the editorial style.
+
+    Three rows top-down: root → pipeline phases → kernels, widths proportional to GPU
+    nanoseconds. Phases keep the project palette; kernels are tints of their phase.
+    """
+    from matplotlib.patches import FancyBboxPatch
+
     prof = json.load(open(profile_path))
-    cats = prof["categories"]
-    total_ns = sum(v for v in cats.values() if v > 0)
-    folded = []
-    for k, ns in cats.items():
-        if ns > 0:
-            folded.append(f"rustwood_train;{PHASE.get(k, 'other')};{k} {ns}")
-    title = f"rustwood GPU training kernels - {label} (total {total_ns/1e6:.1f} ms, ns-resolution)"
-    try:
-        svg = subprocess.run(
-            [FLAMEGRAPH_PL, "--title", title, "--countname", "ns",
-             "--width", "1400", "--height", "28", "--fontsize", "12",
-             "--colors", "hot"],
-            input="\n".join(folded), capture_output=True, text=True, check=True,
-        ).stdout
-        with open(out_svg, "w") as fh:
-            fh.write(svg)
-        print("wrote", out_svg)
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        print(f"[flamegraph.pl unavailable: {e}] writing folded stacks instead")
-        with open(out_svg.replace(".svg", ".folded"), "w") as fh:
-            fh.write("\n".join(folded))
+    cats = {k: v for k, v in prof["categories"].items() if v > 0}
+    total = sum(cats.values())
+    phases = {}
+    for k, v in cats.items():
+        phases.setdefault(PHASE.get(k, "other"), []).append((k, v))
+
+    fig, ax = plt.subplots(figsize=(11.5, 3.0))
+    h, gap = 1.0, 0.05
+
+    def cell(x, y, w, color, label_main, label_sub, dark_text):
+        if w <= 0:
+            return
+        ax.add_patch(FancyBboxPatch(
+            (x + total * 0.0008, y + gap), w - total * 0.0016, h - 2 * gap,
+            boxstyle="round,pad=0,rounding_size=" + str(total * 0.004),
+            linewidth=0, facecolor=color))
+        if w / total > 0.045:  # only label cells wide enough to read
+            tc = "#15202B" if dark_text else "white"
+            ax.text(x + w / 2, y + h * 0.60, label_main, ha="center", va="center",
+                    fontsize=9, color=tc, fontweight="semibold")
+            if label_sub and w / total > 0.07:
+                ax.text(x + w / 2, y + h * 0.30, label_sub, ha="center", va="center",
+                        fontsize=7.5, color=tc, alpha=0.85)
+
+    cell(0, 2 * (h), total, "#EDF0F3", "rustwood training", f"{total/1e6:.0f} ms", True)
+    x = 0
+    for ph in PHASE_ORDER:
+        if ph not in phases:
+            continue
+        items = sorted(phases[ph], key=lambda t: -t[1])
+        pw = sum(v for _, v in items)
+        cell(x, h, pw, PHASE_COLOR[ph], ph.replace("_", "-"),
+             f"{100*pw/total:.0f}%", ph in ("leaf_reduce", "other"))
+        kx = x
+        for i, (k, v) in enumerate(items):
+            cell(kx, 0, v, _tint(PHASE_COLOR[ph], 0.30 + 0.12 * (i % 3)), k,
+                 f"{100*v/total:.0f}%", True)
+            kx += v
+        x += pw
+
+    ax.set_xlim(-total * 0.01, total * 1.01)
+    ax.set_ylim(-0.1, 3 * h + 0.15)
+    ax.axis("off")
+    style.title(ax, f"GPU training kernels — {label}",
+                f"nanosecond-resolution profile · bar width $\\propto$ GPU time · total {total/1e6:.0f} ms")
+    fig.savefig(out_png)
+    plt.close(fig)
+    print("wrote", out_png)
 
 
 def synthetic_rows(results):
@@ -219,7 +270,7 @@ def main():
 
     for pair in filter(None, args.profiles.split(",")):
         label, path = pair.split("=", 1)
-        make_flamegraph(path, os.path.join(args.out, f"flamegraph_{label}.svg"), f"{label} rows")
+        make_flamegraph(path, os.path.join(args.out, f"flamegraph_{label}.png"), f"{label} rows")
 
     plot_train_time(results, os.path.join(args.out, "train_time_loglog.png"))
     plot_infer(results, os.path.join(args.out, "infer_throughput.png"))

@@ -80,7 +80,7 @@ time and dominating LightGBM/baseline on the accuracy-vs-time plane:
 Per-kernel flamegraphs (nanosecond resolution, via `--profile-out`). After the async
 rewrite + replication + subtraction, the histogram build is the sole hotspot:
 
-![flamegraph](results/flamegraph_1M.svg)
+![flamegraph](results/flamegraph_1M.png)
 
 ---
 
