@@ -128,3 +128,14 @@ def legend(ax, **kw):
     kw.setdefault("frameon", False)
     kw.setdefault("loc", "best")
     return ax.legend(**kw)
+
+
+def loggrid(ax, axis="both"):
+    """Subtle major+minor grid for log (or log-log) plots, on both axes.
+
+    The global style only draws major y-grid, which on a log scale is just the decade
+    lines (sparse). This adds the in-between minor lines so log plots read clearly.
+    """
+    ax.set_axisbelow(True)
+    ax.grid(True, which="major", axis=axis, color=GRID, linewidth=0.9, zorder=0)
+    ax.grid(True, which="minor", axis=axis, color="#EBEEF2", linewidth=0.55, zorder=0)

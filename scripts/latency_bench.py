@@ -128,12 +128,13 @@ def main():
             xs = [b for b, _ in res]
             ys = [c / b for b, c in res]
             plt.loglog(xs, ys, "o-", color=COLORS[name], label=name, lw=2.2, ms=7)
-    plt.axhline(1000, color="k", ls="--", lw=1.2)
-    plt.text(1.2, 1100, "1 µs / row", fontsize=9)
+    plt.axhline(1000, color=style.FAINT, ls=(0, (4, 3)), lw=1.0, zorder=1)
+    plt.text(1.15, 1150, "1 µs / row", fontsize=8.5, color=style.MUTED)
     plt.xlabel("batch size (rows scored per call)")
     plt.ylabel("amortized latency (ns / row)")
-    plt.title("Inference: per-row latency vs batch size (true end-to-end)\n"
-              "CPU path serves single rows in <1 µs; GPU dominates at large batch")
+    style.title(plt.gca(), "Inference latency vs batch size",
+                "true end-to-end · CPU path serves single rows in <1 µs · GPU wins at large batch")
+    style.loggrid(plt.gca())
     plt.legend()
     plt.savefig(os.path.join(args.out, "infer_latency_perrow.png"))
     plt.close()
@@ -147,7 +148,9 @@ def main():
             plt.loglog(xs, ys, "o-", color=COLORS[name], label=name, lw=2.2, ms=7)
     plt.xlabel("batch size (rows scored per call)")
     plt.ylabel("per-call latency (µs)")
-    plt.title("Inference: per-call latency vs batch size (true end-to-end)")
+    style.title(plt.gca(), "Inference latency per call vs batch size",
+                "true end-to-end · lower is better")
+    style.loggrid(plt.gca())
     plt.legend()
     plt.savefig(os.path.join(args.out, "infer_latency_percall.png"))
     plt.close()
