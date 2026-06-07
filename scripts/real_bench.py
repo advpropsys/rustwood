@@ -174,41 +174,68 @@ def run_baseline(Xi, yi, Xv, yv, Xf, yf, Xte, yte):
 
 
 # --------------------------------------------------------------------- plotting
-def grouped_bar(results, key, ylabel, title, fname, logy=False, ylim=None, annotate_win=False):
-    names = [d["name"] for d in results]
-    fig, ax = plt.subplots(figsize=(8.2, 4.7))
+SHORT = {"rustwood (B300)": "rustwood", "XGBoost-GPU": "XGBoost",
+         "LightGBM-GPU": "LightGBM", "baseline (CPU)": "baseline"}
+
+
+def grouped_bar(results, key, ylabel, main, sub, fname, fmt, logy=False, ylim=None,
+                legend_loc="below", label_hero=True):
+    names = [d["name"].replace("\n", " ") for d in results]
+    fig, ax = plt.subplots(figsize=(9.0, 5.0))
     x = np.arange(len(names))
-    w = 0.2
+    w = 0.19
     for i, lib in enumerate(LIBS):
         vals = [d["by"].get(lib, {}).get(key, np.nan) for d in results]
-        ax.bar(x + (i - 1.5) * w, vals, w, color=style.color(lib),
-               label=lib, edgecolor="white", linewidth=0.4)
-    if annotate_win:
+        ax.bar(x + (i - 1.5) * w, vals, w, color=style.color(lib), label=SHORT[lib],
+               zorder=3, edgecolor="white", linewidth=0.6)
+    if label_hero:  # direct value labels on the rustwood (hero) bars
         for j, d in enumerate(results):
-            vals = {lib: d["by"][lib][key] for lib in LIBS if lib in d["by"]}
-            if vals and max(vals, key=vals.get) == "rustwood (B300)":
-                ax.scatter(x[j] - 1.5 * w, d["by"]["rustwood (B300)"][key] + (0.0 if logy else 0.008),
-                           marker="*", s=80, color="black", zorder=6)
+            v = d["by"].get("rustwood (B300)", {}).get(key, np.nan)
+            if not np.isnan(v):
+                won = v == max((r[key] for r in d["by"].values()), default=v)
+                ax.annotate(fmt(v), (x[j] - 1.5 * w, v), textcoords="offset points",
+                            xytext=(0, 5), ha="center", fontsize=8.6,
+                            color=style.color("rustwood"),
+                            fontweight="bold" if won else "semibold")
+    style.title(ax, main, sub)
     ax.set_xticks(x)
-    ax.set_xticklabels([n.replace("\n", " ") for n in names], rotation=12, ha="right")
+    ax.set_xticklabels(names)
     ax.set_ylabel(ylabel)
-    ax.set_title(title)
     if logy:
         ax.set_yscale("log")
     if ylim:
         ax.set_ylim(*ylim)
-    ax.grid(axis="x", visible=False)
-    ax.legend(ncol=2, loc="lower right" if not logy else "best", framealpha=0.92)
+    ax.set_xlim(-0.55, len(names) - 0.45)
+    ax.margins(y=0.12)
+    if legend_loc == "below":
+        style.legend(ax, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.13))
+    else:
+        style.legend(ax, ncol=2, loc=legend_loc)
     fig.savefig(os.path.join(RESULTS, fname))
     plt.close(fig)
     print("wrote", fname)
 
 
+def make_plots(results):
+    grouped_bar(results, "auc", "test ROC-AUC",
+                "Accuracy on real tabular datasets",
+                "depth 6, 200 trees · each library learning-rate-tuned on validation · test ROC-AUC",
+                "real_auc.png", fmt=lambda v: f"{v:.3f}", ylim=(0.70, 1.0), legend_loc="below")
+    grouped_bar(results, "train", "training wall-clock (s)",
+                "Training time on real datasets",
+                "depth 6, 200 trees · warm (cold-start excluded) · lower is better",
+                "real_train_time.png", fmt=lambda v: f"{v:.2f}s", logy=True,
+                legend_loc="upper left", label_hero=True)
+
+
 def main():
-    if not os.path.exists(RUSTWOOD_BIN):
-        sys.exit(f"build rustwood first: {RUSTWOOD_BIN}")
     style.apply()
     os.makedirs(RESULTS, exist_ok=True)
+    if "--plot-only" in sys.argv:  # re-render figures from saved results
+        make_plots(json.load(open(os.path.join(RESULTS, "real_results.json"))))
+        return
+    if not os.path.exists(RUSTWOOD_BIN):
+        sys.exit(f"build rustwood first: {RUSTWOOD_BIN}")
 
     # Warm the GPU (pay CUDA/context cold-start once, before any timing).
     try:
@@ -261,15 +288,9 @@ def main():
                 print(f"  {lib:<16}{r['auc']:>8.4f}{r['lr']:>6}{r['train']:>10.3f}{r['pred']*1e3:>10.2f}{star}")
         results.append({"name": name.replace("-581k", "\n581k"), "by": by})
 
-    json.dump([{"name": r["name"].replace("\n", " "), "by": r["by"]} for r in results],
-              open(os.path.join(RESULTS, "real_results.json"), "w"), indent=2)
-
-    grouped_bar(results, "auc", "test ROC-AUC",
-                "Accuracy on real datasets (depth 6, 200 trees; each library lr-tuned)",
-                "real_auc.png", ylim=(0.70, 1.0), annotate_win=True)
-    grouped_bar(results, "train", "training wall-clock (s)",
-                "Training time on real datasets (warm, log scale)",
-                "real_train_time.png", logy=True)
+    out = [{"name": r["name"].replace("\n", " "), "by": r["by"]} for r in results]
+    json.dump(out, open(os.path.join(RESULTS, "real_results.json"), "w"), indent=2)
+    make_plots(out)
 
 
 if __name__ == "__main__":

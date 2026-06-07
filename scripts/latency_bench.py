@@ -134,9 +134,7 @@ def main():
     plt.ylabel("amortized latency (ns / row)")
     plt.title("Inference: per-row latency vs batch size (true end-to-end)\n"
               "CPU path serves single rows in <1 µs; GPU dominates at large batch")
-    plt.grid(True, which="both", ls=":", alpha=0.5)
     plt.legend()
-    plt.tight_layout()
     plt.savefig(os.path.join(args.out, "infer_latency_perrow.png"))
     plt.close()
 
@@ -150,9 +148,7 @@ def main():
     plt.xlabel("batch size (rows scored per call)")
     plt.ylabel("per-call latency (µs)")
     plt.title("Inference: per-call latency vs batch size (true end-to-end)")
-    plt.grid(True, which="both", ls=":", alpha=0.5)
     plt.legend()
-    plt.tight_layout()
     plt.savefig(os.path.join(args.out, "infer_latency_percall.png"))
     plt.close()
 
