@@ -81,6 +81,55 @@ rewrite + replication + subtraction, the histogram build is the sole hotspot:
 
 ![flamegraph](results/flamegraph_1M.png)
 
+### Compactness
+
+The whole library — GPU kernels, the CPU trainer, and the host driver — is one small Rust
+codebase. The pure-Rust kernels compile to PTX, so there is no separate CUDA-C++ / CPU-C++
+split to maintain.
+
+| library | core training source | lines |
+|---------|----------------------|------:|
+| XGBoost | `src/` + `include/` (C++/CUDA) | 86,660 |
+| LightGBM | `src/` + `include/` (C++/CUDA) | 63,002 |
+| **rustwood** | `src/` (Rust: GPU kernels + CPU + host) | **3,170** |
+
+rustwood is ~20–27× smaller. It is more focused (oblivious trees, L2 + logistic), so this
+is not feature-for-feature — but the core histogram-GBDT, on GPU and CPU, fits in 3k lines.
+(GPU kernels 1,176 · CPU trainer 307 · host/driver 1,687.)
+
+### Model I/O — the `.rwood` format
+
+Models serialize to a compact little-endian `.rwood` binary (header + raw `f32`/`u32`
+array blits + target-encoder maps). I/O is a direct slice blit, with no parsing:
+
+| format (500 trees, depth 6) | file | save | load |
+|-----------------------------|-----:|-----:|-----:|
+| XGBoost (json) | 3597 KB | 36.0 ms | 72.0 ms |
+| XGBoost (ubj, binary) | 2411 KB | 20.0 ms | 6.26 ms |
+| LightGBM (txt) | 2849 KB | 15.2 ms | 5.84 ms |
+| **rustwood (`.rwood`)** | **148 KB** | **0.17 ms** | **0.044 ms** |
+
+**88–1600× faster to load, 16–24× smaller** (compact oblivious trees + raw binary).
+Loaded models predict bit-identically, categorical encoders included.
+
+```bash
+./target/release/rustwood --data /tmp/d --objective l2 --trees 500 --save-model model.rwood
+./target/release/rustwood --data /tmp/d --load-model model.rwood     # no training, no GPU
+```
+
+### CPU device
+
+`--device cpu` runs a rayon-parallel host trainer (histogram subtraction, column-major
+apply, branchless gain-eval, subsample/GOSS) with **no CUDA context** — the binary runs on
+a GPU-free box. It produces a bit-identical model to the GPU path (verified: same R²/AUC
+for both objectives) and is the fastest CPU oblivious-tree trainer measured (faster than
+XGBoost-CPU / LightGBM-CPU at matched depth-6 config). The GPU path is the fast path; the
+CPU device is for portability and no-GPU environments.
+
+```bash
+./target/release/rustwood --data /tmp/d --objective l2 --trees 100 --device cpu
+```
+
 ---
 
 ## How it works
@@ -110,15 +159,15 @@ Performance engineering, in order of impact:
 
 ## Build & run
 
-Requires a sibling [`cuda-oxide`](https://github.com/NVlabs/cuda-oxide) checkout
-(`../cuda-oxide`), CUDA 13, and the pinned Rust nightly (auto-selected via
-`rust-toolchain.toml`). Build the cuda-oxide backend once (`cd ../cuda-oxide && cargo oxide
-doctor`), then:
+cuda-oxide is vendored as a git submodule at `external/cuda-oxide`, so the repo is
+self-contained. Requires CUDA 13 and the pinned Rust nightly (auto-selected via
+`rust-toolchain.toml`).
 
 ```bash
-./build.sh                       # -> target/release/rustwood   (sm_103 / B300)
-ARCH=sm_90 ./build.sh            # target a different GPU
-./build.sh --features f64-hist   # opt-in f64 histogram accumulation
+git clone --recursive <repo>      # or: git submodule update --init --recursive
+./build.sh                        # -> target/release/rustwood   (sm_103 / B300)
+ARCH=sm_90 ./build.sh             # target a different GPU
+./build.sh --features f64-hist    # opt-in f64 histogram accumulation
 
 # generate data and train
 python scripts/gen_data.py --out /tmp/d --n 1000000
