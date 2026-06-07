@@ -195,12 +195,14 @@ Objectives: `--objective l2` (RMSE/MAE/R²) and `--objective logistic` (AUC/logl
 rustwood/
 ├── src/
 │   ├── gpu_kernels.rs   # all #[kernel] functions (pure Rust → PTX)
-│   ├── booster.rs       # async training loop, device-resident model, inference
+│   ├── booster.rs       # async GPU loop, device-resident model, inference, --serve worker, .rwood I/O
+│   ├── cpu.rs           # rayon CPU trainer (--device cpu), bit-identical to the GPU path
 │   ├── data.rs encoding.rs config.rs metrics.rs main.rs
-├── python/              # sklearn-style wrapper (shells out to the binary)
+├── python/              # sklearn-style wrapper (GPU + CPU; persistent worker, no FFI)
 ├── notebooks/           # Colab demo: rustwood vs LightGBM
 ├── scripts/             # data gen, benchmark harnesses, plotting
 ├── results/             # generated plots + flamegraphs
+├── assets/              # brand identity (logomark + social-preview banner)
 ├── external/cuda-oxide  # vendored backend (git submodule)
 └── build.sh             # build against the vendored cuda-oxide submodule
 ```
