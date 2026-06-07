@@ -79,6 +79,13 @@ fn main() {
         let t1 = std::time::Instant::now();
         let scores = booster.predict_host(&ds.x_test, ds.n_test);
         let pred_ms = t1.elapsed().as_secs_f64() * 1e3;
+        if !cfg.dump_pred.is_empty() {
+            let mut bytes = Vec::with_capacity(scores.len() * 4);
+            for &s in &scores {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            std::fs::write(&cfg.dump_pred, &bytes).expect("write dump-pred");
+        }
         println!("loaded {} in {load_ms:.3} ms; predicted {} rows in {pred_ms:.3} ms",
             cfg.load_model, ds.n_test);
         let line = match booster.config().objective {

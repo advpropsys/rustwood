@@ -192,6 +192,23 @@ python scripts/latency_bench.py --rustwood-bin target/release/rustwood   # laten
 python scripts/viz.py ...       # plots + flamegraphs
 ```
 
+### Python API
+
+A thin sklearn-style wrapper (`python/`) shells out to the binary — GPU **and** CPU, no FFI.
+`pip install ./python` (the binary is found via `RUSTWOOD_BIN` or the repo build).
+
+```python
+from rustwood import RustwoodRegressor, RustwoodClassifier, load
+
+m = RustwoodRegressor(n_trees=500, depth=6, device="gpu").fit(X, y)   # or device="cpu"
+preds = m.predict(X_test)
+m.save("model.rwood")
+m2 = load("model.rwood")            # predicts on the host (CPU), no GPU needed
+
+clf = RustwoodClassifier(n_trees=300, device="cpu").fit(X, y)
+proba = clf.predict_proba(X_test)[:, 1]
+```
+
 ---
 
 ## Features (all off by default; the default path is the fast f32 booster)
