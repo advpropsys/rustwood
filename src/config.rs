@@ -74,6 +74,10 @@ pub struct Config {
     /// test row, in input order) to this path. Lets an external caller recover per-row
     /// predictions, which the metrics line alone does not expose.
     pub dump_pred: String,
+    /// Write the trained model to this path (.rwood binary) after fit.
+    pub save_model: String,
+    /// Load a model from this path (.rwood) and predict; skips training.
+    pub load_model: String,
     /// If true, after training run a per-batch end-to-end inference latency sweep.
     pub latency_bench: bool,
     /// If true, run a device-resident peak-throughput sweep up to the VRAM ceiling.
@@ -114,6 +118,8 @@ impl Default for Config {
             replicas: 64,
             profile_out: String::new(),
             dump_pred: String::new(),
+            save_model: String::new(),
+            load_model: String::new(),
             latency_bench: false,
             throughput_bench: false,
         }
@@ -180,6 +186,8 @@ impl Config {
                 }
                 "--replicas" => cfg.replicas = val().parse().unwrap(),
                 "--profile-out" => cfg.profile_out = val().clone(),
+                "--save-model" => cfg.save_model = val().clone(),
+                "--load-model" => cfg.load_model = val().clone(),
                 "--dump-pred" => cfg.dump_pred = val().clone(),
                 // Takes a value (1/true) to keep the simple key-value parser intact.
                 "--latency-bench" => cfg.latency_bench = matches!(val().as_str(), "1" | "true"),

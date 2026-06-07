@@ -12,6 +12,7 @@
 //! the headline throughput numbers.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -696,5 +697,139 @@ impl Booster {
             out.push((b, t0.elapsed().as_nanos() as f64 / repeats as f64));
         }
         Ok(out)
+    }
+}
+
+// --- .rwood model serialization: compact little-endian binary, raw-array blit I/O ---
+
+#[inline]
+fn as_bytes<T: Copy>(s: &[T]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) }
+}
+fn wu32<W: Write>(w: &mut W, v: u32) -> std::io::Result<()> { w.write_all(&v.to_le_bytes()) }
+fn warr<W: Write, T: Copy>(w: &mut W, s: &[T]) -> std::io::Result<()> {
+    wu32(w, s.len() as u32)?;
+    w.write_all(as_bytes(s))
+}
+fn ru32<R: Read>(r: &mut R) -> std::io::Result<u32> {
+    let mut b = [0u8; 4];
+    r.read_exact(&mut b)?;
+    Ok(u32::from_le_bytes(b))
+}
+fn rf32<R: Read>(r: &mut R) -> std::io::Result<f32> {
+    let mut b = [0u8; 4];
+    r.read_exact(&mut b)?;
+    Ok(f32::from_le_bytes(b))
+}
+fn rvec_f32<R: Read>(r: &mut R) -> std::io::Result<Vec<f32>> {
+    let len = ru32(r)? as usize;
+    let mut v = vec![0f32; len];
+    r.read_exact(unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, len * 4) })?;
+    Ok(v)
+}
+fn rvec_u32<R: Read>(r: &mut R) -> std::io::Result<Vec<u32>> {
+    let len = ru32(r)? as usize;
+    let mut v = vec![0u32; len];
+    r.read_exact(unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, len * 4) })?;
+    Ok(v)
+}
+
+impl Booster {
+    /// Serialize the trained model to a `.rwood` binary: a small header, raw f32/u32 array
+    /// blits (feat/thr/leafval), then the target-encoder maps. Little-endian.
+    pub fn save_model(&self, path: &str) -> std::io::Result<()> {
+        let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
+        w.write_all(b"RWD1")?;
+        wu32(&mut w, 1)?; // format version
+        wu32(&mut w, self.n_features as u32)?;
+        wu32(&mut w, self.cfg.n_trees as u32)?;
+        wu32(&mut w, self.cfg.depth as u32)?;
+        wu32(&mut w, matches!(self.cfg.objective, Objective::Logistic) as u32)?;
+        w.write_all(&self.base_score.to_le_bytes())?;
+        w.write_all(&self.gmean.to_le_bytes())?;
+        w.write_all(&self.cfg.cat_hash_buckets.to_le_bytes())?;
+        wu32(&mut w, self.cfg.categorical.len() as u32)?;
+        for &c in &self.cfg.categorical {
+            wu32(&mut w, c as u32)?;
+        }
+        warr(&mut w, &self.feat)?;
+        warr(&mut w, &self.thr)?;
+        warr(&mut w, &self.leafval)?;
+        wu32(&mut w, self.encoders.len() as u32)?;
+        for map in &self.encoders {
+            wu32(&mut w, map.len() as u32)?;
+            for (&k, &v) in map {
+                w.write_all(&k.to_le_bytes())?;
+                w.write_all(&v.to_le_bytes())?;
+            }
+        }
+        w.flush()
+    }
+
+    /// Load a `.rwood` model into a CPU-device Booster (no GPU context). Score with
+    /// `predict_host`.
+    pub fn load_model(path: &str) -> std::io::Result<Booster> {
+        let mut r = std::io::BufReader::new(std::fs::File::open(path)?);
+        let mut magic = [0u8; 4];
+        r.read_exact(&mut magic)?;
+        if &magic != b"RWD1" {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not a .rwood file"));
+        }
+        let _ver = ru32(&mut r)?;
+        let n_features = ru32(&mut r)? as usize;
+        let n_trees = ru32(&mut r)? as usize;
+        let depth = ru32(&mut r)? as usize;
+        let logistic = ru32(&mut r)? == 1;
+        let base_score = rf32(&mut r)?;
+        let gmean = rf32(&mut r)?;
+        let mut hb = [0u8; 8];
+        r.read_exact(&mut hb)?;
+        let cat_hash_buckets = u64::from_le_bytes(hb);
+        let n_cat = ru32(&mut r)? as usize;
+        let mut categorical = Vec::with_capacity(n_cat);
+        for _ in 0..n_cat {
+            categorical.push(ru32(&mut r)? as usize);
+        }
+        let feat = rvec_u32(&mut r)?;
+        let thr = rvec_f32(&mut r)?;
+        let leafval = rvec_f32(&mut r)?;
+        let n_enc = ru32(&mut r)? as usize;
+        let mut encoders: crate::encoding::Encoders = Vec::with_capacity(n_enc);
+        for _ in 0..n_enc {
+            let ml = ru32(&mut r)? as usize;
+            let mut map = HashMap::with_capacity(ml);
+            for _ in 0..ml {
+                let mut kb = [0u8; 8];
+                r.read_exact(&mut kb)?;
+                map.insert(i64::from_le_bytes(kb), rf32(&mut r)?);
+            }
+            encoders.push(map);
+        }
+        let mut cfg = Config::default();
+        cfg.n_trees = n_trees;
+        cfg.depth = depth;
+        cfg.objective = if logistic { Objective::Logistic } else { Objective::SquaredError };
+        cfg.categorical = categorical;
+        cfg.cat_hash_buckets = cat_hash_buckets;
+        cfg.device = Device::Cpu;
+        Ok(Booster {
+            ctx: None, cfg, n_features, base_score, feat, thr, leafval, encoders, gmean,
+            fi_gain: Vec::new(), fi_count: Vec::new(), leafvar: Vec::new(),
+        })
+    }
+
+    /// Host prediction: apply target encoding (if any), then the branchless oblivious
+    /// traversal. GPU-free -- the right path for a loaded model.
+    pub fn predict_host(&self, x: &[f32], n: usize) -> Vec<f32> {
+        let mut out = vec![0f32; n];
+        if self.cfg.categorical.is_empty() {
+            self.predict_cpu(x, n, &mut out);
+        } else {
+            let mut xt = x.to_vec();
+            crate::encoding::transform(&mut xt, n, self.n_features, &self.cfg.categorical,
+                &self.encoders, self.gmean, self.cfg.cat_hash_buckets);
+            self.predict_cpu(&xt, n, &mut out);
+        }
+        out
     }
 }

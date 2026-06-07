@@ -69,6 +69,32 @@ fn main() {
     let latency_bench = cfg.latency_bench && cfg.device == Device::Gpu;
     let throughput_bench = cfg.throughput_bench && cfg.device == Device::Gpu;
     let device = cfg.device;
+    let save_model = cfg.save_model.clone();
+
+    // --load-model: load a .rwood model and predict; no training, no GPU.
+    if !cfg.load_model.is_empty() {
+        let t0 = std::time::Instant::now();
+        let booster = Booster::load_model(&cfg.load_model).expect("load .rwood model");
+        let load_ms = t0.elapsed().as_secs_f64() * 1e3;
+        let t1 = std::time::Instant::now();
+        let scores = booster.predict_host(&ds.x_test, ds.n_test);
+        let pred_ms = t1.elapsed().as_secs_f64() * 1e3;
+        println!("loaded {} in {load_ms:.3} ms; predicted {} rows in {pred_ms:.3} ms",
+            cfg.load_model, ds.n_test);
+        let line = match booster.config().objective {
+            Objective::Logistic => format!(
+                "RESULT objective=logistic load_ms={load_ms:.4} pred_ms={pred_ms:.4} auc={:.6} logloss={:.6} accuracy={:.6}",
+                metrics::auc(&scores, &ds.y_test), metrics::logloss(&scores, &ds.y_test),
+                metrics::accuracy(&scores, &ds.y_test)),
+            Objective::SquaredError => format!(
+                "RESULT objective=l2 load_ms={load_ms:.4} pred_ms={pred_ms:.4} rmse={:.6} mae={:.6} r2={:.6}",
+                metrics::rmse(&scores, &ds.y_test), metrics::mae(&scores, &ds.y_test),
+                metrics::r2(&scores, &ds.y_test)),
+        };
+        println!("\n{line}");
+        return;
+    }
+
     let mut booster = Booster::new(cfg).expect("init CUDA context / load PTX module");
 
     let train_time = if profile_out.is_empty() {
@@ -87,6 +113,14 @@ fn main() {
         println!("wrote kernel profile -> {profile_out}");
         prof.total
     };
+
+    if !save_model.is_empty() {
+        let t = std::time::Instant::now();
+        booster.save_model(&save_model).expect("save .rwood model");
+        let sz = std::fs::metadata(&save_model).map(|m| m.len()).unwrap_or(0);
+        println!("saved model -> {save_model} ({sz} bytes, {:.3} ms)", t.elapsed().as_secs_f64() * 1e3);
+    }
+
     if latency_bench {
         let batches = [1usize, 8, 64, 512, 4096, 32768, 262144];
         let res = booster
