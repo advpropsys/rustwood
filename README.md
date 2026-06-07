@@ -137,9 +137,13 @@ git clone --recursive <repo>      # or: git submodule update --init --recursive
 ARCH=sm_90 ./build.sh             # target a different GPU
 ./build.sh --features f64-hist    # opt-in f64 histogram accumulation
 
+# CPU-only build on machines without CUDA
+cargo build --release --no-default-features
+
 # generate data and train
 python scripts/gen_data.py --out /tmp/d --n 1000000
 ./target/release/rustwood --data /tmp/d --objective l2 --trees 300 --depth 6 --lr 0.1
+./target/release/rustwood --device cpu --data /tmp/d --objective l2 --trees 100  # CPU-only binary
 ```
 
 Benchmark harnesses (need `xgboost`, `lightgbm`):

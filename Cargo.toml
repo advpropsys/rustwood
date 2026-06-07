@@ -11,6 +11,8 @@ description = "GPU oblivious-tree gradient boosting with kernels written in pure
 exclude = ["external/cuda-oxide"]
 
 [features]
+default = ["gpu"]
+gpu = ["dep:cuda-device", "dep:cuda-host", "dep:cuda-core", "dep:cuda-bindings"]
 # Accumulate histogram cumulation / gain / replica-fold in f64 instead of f32
 # (storage stays f32 — no extra memory). Build with: ./build.sh --features f64-hist
 f64-hist = []
@@ -19,10 +21,10 @@ f16-hist = []
 
 [dependencies]
 # cuda-oxide device/host/runtime crates (sibling checkout).
-cuda-device = { path = "external/cuda-oxide/crates/cuda-device" }
-cuda-host = { path = "external/cuda-oxide/crates/cuda-host" }
-cuda-core = { path = "external/cuda-oxide/crates/cuda-core" }
-cuda-bindings = { path = "external/cuda-oxide/crates/cuda-bindings" }
+cuda-device = { path = "external/cuda-oxide/crates/cuda-device", optional = true }
+cuda-host = { path = "external/cuda-oxide/crates/cuda-host", optional = true }
+cuda-core = { path = "external/cuda-oxide/crates/cuda-core", optional = true }
+cuda-bindings = { path = "external/cuda-oxide/crates/cuda-bindings", optional = true }
 rayon = "1.11"
 
 [[bin]]
