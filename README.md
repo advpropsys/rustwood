@@ -12,6 +12,9 @@ no CUDA C, no FFI shims. It targets **NVIDIA Blackwell** (built and benchmarked 
 > just `D` splits and `2^D` leaves. That makes split-finding a single argmax per level and
 > **inference branchless** — the source of rustwood's order-of-magnitude faster predictions.
 
+**Try it:** [`notebooks/rustwood_vs_lightgbm.ipynb`](notebooks/rustwood_vs_lightgbm.ipynb) — a
+Colab demo on an sklearn dataset (build, train, compare with LightGBM, `.rwood` save/load).
+
 ---
 
 ## Highlights
