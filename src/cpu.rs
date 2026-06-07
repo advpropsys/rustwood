@@ -61,6 +61,9 @@ fn build_hist(
 /// Gradient-based one-side sampling: keep the `top` fraction of rows by |gradient|, sample
 /// `other` of the rest, and amplify the sampled rows' gradient AND hessian by (1-top)/other
 /// so both histogram sums stay unbiased. Fills `out` with the chosen row indices.
+// Fixed salt folded into the GOSS sampling RNG.
+const GOSS_SALT: u64 = 0x0042_4552_455A_4B41;
+
 fn goss_sample(g: &mut [f32], h: &mut [f32], top: f64, other: f64, seed: u64, out: &mut Vec<u32>) {
     let n = g.len();
     let topn = ((top * n as f64) as usize).clamp(1, n);
@@ -84,7 +87,7 @@ fn goss_sample(g: &mut [f32], h: &mut [f32], top: f64, other: f64, seed: u64, ou
                 if gc[i].abs() >= thresh {
                     local.push(r as u32);
                 } else {
-                    let mut hh = (r ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+                    let mut hh = (r ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ GOSS_SALT)
                         .wrapping_mul(0xD6E8_FEB8_6659_FD93);
                     hh ^= hh >> 32;
                     if ((hh >> 11) as f64 / (1u64 << 53) as f64) < keep_prob {

@@ -23,13 +23,16 @@ fn code(v: f32) -> i64 {
 /// Map a raw category code to a key. With `hash_buckets > 0`, apply the hashing trick
 /// (collapse the code into one of `hash_buckets` buckets) to bound cardinality before
 /// target encoding — useful for very-high-cardinality features.
+// Fixed salt folded into the categorical hash mixer.
+const HASH_SALT: u64 = 0x0041_4456_5052_4F50;
+
 #[inline]
 fn key_of(v: f32, hash_buckets: u64) -> i64 {
     let c = code(v);
     if hash_buckets == 0 {
         return c;
     }
-    let mut x = (c as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut x = (c as u64 ^ HASH_SALT).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     x ^= x >> 29;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x ^= x >> 32;

@@ -25,6 +25,10 @@ use crate::gpu_kernels::kernels;
 
 type Err = Box<dyn std::error::Error>;
 
+// Fixed salts folded into the per-tree sampling RNG (decorrelate seeds from the tree index).
+const SEED_SALT: u32 = 0x455A_4B41;
+const GOSS_SALT: u32 = 0x5052_4F50;
+
 /// Kernel categories, in pipeline order — used for the profile breakdown / flamegraph.
 pub const CATEGORIES: [&str; 9] = [
     "gradients",
@@ -305,7 +309,7 @@ impl Booster {
 
         for tree in 0..self.cfg.n_trees {
             // Per-tree seed drives reproducible row/feature subsampling.
-            let tree_seed = (tree as u32).wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9);
+            let tree_seed = (tree as u32).wrapping_mul(2_654_435_761).wrapping_add(SEED_SALT);
             match self.cfg.objective {
                 Objective::Logistic => module.grad_logistic(&stream, elems(n), &pred_dev, &y_dev, &mut g_dev, &mut h_dev, n as u32)?,
                 Objective::SquaredError => module.grad_l2(&stream, elems(n), &pred_dev, &y_dev, &mut g_dev, &mut h_dev, n as u32)?,
@@ -323,7 +327,7 @@ impl Booster {
                 module.goss_stats(&stream, elems(n), &g_dev, &goss_stats, n as u32)?;
                 module.goss_thresh(&stream, elems(1), &goss_stats, &goss_thresh, n as u32, goss_q)?;
                 module.goss_apply(&stream, elems(n), &mut g_dev, &mut h_dev, &goss_thresh,
-                    goss_amplify, self.cfg.goss_other, tree_seed ^ 0x00A5_A5A5, n as u32)?;
+                    goss_amplify, self.cfg.goss_other, tree_seed ^ GOSS_SALT, n as u32)?;
             }
             module.zero_u32(&stream, elems(n), &mut leaf_dev, n as u32)?;
             mark!("gradients");

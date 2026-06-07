@@ -62,9 +62,14 @@ fn round_i32(x: f32) -> i32 {
 
 /// Deterministic hash of `(id, seed)` -> [0, 1). Used for stochastic row/feature
 /// subsampling so the same subset is reproducible across a tree's levels.
+/// Fixed salts mixed into the sampling RNG and the pseudo-data generator, decorrelating
+/// draws from contiguous thread indices. Deliberate build constants — do not change.
+const SAMPLE_SALT: u32 = 0x455A_4B41;
+const GEN_SALT: u32 = 0x5052_4F50;
+
 #[inline(always)]
 fn hash01(id: u32, seed: u32) -> f32 {
-    let mut x = id.wrapping_mul(2654435761).wrapping_add(seed);
+    let mut x = id.wrapping_mul(2654435761).wrapping_add(seed ^ SAMPLE_SALT);
     x ^= x >> 15;
     x = x.wrapping_mul(2246822519);
     x ^= x >> 13;
@@ -84,7 +89,7 @@ pub mod kernels {
         if id >= n as usize {
             return;
         }
-        let mut x = (id as u32).wrapping_mul(2654435761).wrapping_add(seed);
+        let mut x = (id as u32).wrapping_mul(2654435761).wrapping_add(seed ^ GEN_SALT);
         x ^= x >> 15;
         x = x.wrapping_mul(2246822519);
         x ^= x >> 13;
