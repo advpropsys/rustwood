@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use cuda_core::memory::{memcpy_dtoh_async, memcpy_htod_async};
 use cuda_core::{CudaContext, DeviceBuffer, DriverError, LaunchConfig, PinnedHostBuffer};
 
-use crate::config::{Config, Objective};
+use crate::config::{Config, Device, Objective};
 use crate::data::{Dataset, compute_boundaries};
 use crate::gpu_kernels::kernels;
 
@@ -38,7 +38,7 @@ pub const CATEGORIES: [&str; 9] = [
 ];
 
 pub struct Booster {
-    ctx: Arc<CudaContext>,
+    ctx: Option<Arc<CudaContext>>,
     cfg: Config,
     n_features: usize,
     base_score: f32,
@@ -110,10 +110,18 @@ pub struct Profile {
 
 impl Booster {
     pub fn new(cfg: Config) -> Result<Self, DriverError> {
-        let ctx = CudaContext::new(cfg.gpu)?;
+        // CPU device runs GPU-free: no CUDA context is created.
+        let ctx = match cfg.device {
+            Device::Cpu => None,
+            Device::Gpu => Some(CudaContext::new(cfg.gpu)?),
+        };
         Ok(Self { ctx, cfg, n_features: 0, base_score: 0.0, feat: Vec::new(), thr: Vec::new(),
             leafval: Vec::new(), encoders: Vec::new(), gmean: 0.0,
             fi_gain: Vec::new(), fi_count: Vec::new(), leafvar: Vec::new() })
+    }
+
+    fn gpu_ctx(&self) -> &Arc<CudaContext> {
+        self.ctx.as_ref().expect("GPU context unavailable (device = cpu)")
     }
 
     pub fn config(&self) -> &Config {
@@ -121,7 +129,43 @@ impl Booster {
     }
 
     pub fn fit(&mut self, ds: &Dataset) -> Result<Duration, Err> {
+        if self.cfg.device == Device::Cpu {
+            return self.fit_cpu(ds);
+        }
         Ok(self.fit_inner(ds, false)?.total)
+    }
+
+    /// Host training path (no GPU). Mirrors `fit_inner`'s host prep, then builds the
+    /// oblivious forest on the CPU and stores the same `feat`/`thr`/`leafval` model.
+    fn fit_cpu(&mut self, ds: &Dataset) -> Result<Duration, Err> {
+        let n = ds.n_train;
+        let nf = ds.n_features;
+        self.n_features = nf;
+        let t0 = std::time::Instant::now();
+
+        let mut xtr = ds.x_train.clone();
+        if !self.cfg.categorical.is_empty() {
+            let (enc, gm) = crate::encoding::fit_transform_train(
+                &mut xtr, n, nf, &ds.y_train, &self.cfg.categorical, self.cfg.te_smoothing, 5,
+                self.cfg.cat_hash_buckets);
+            self.encoders = enc;
+            self.gmean = gm;
+        }
+        let boundaries = compute_boundaries(
+            &xtr, n, nf, self.cfg.n_bins, self.cfg.bin_sample, self.cfg.unique_bins);
+        let mean = (ds.y_train.iter().sum::<f32>() / n as f32).clamp(1e-6, 1.0 - 1e-6);
+        self.base_score = match self.cfg.objective {
+            Objective::Logistic => (mean / (1.0 - mean)).ln(),
+            Objective::SquaredError => mean,
+        };
+
+        let fit = crate::cpu::train(&xtr, &ds.y_train, n, nf, &boundaries, self.base_score, &self.cfg);
+        self.feat = fit.feat;
+        self.thr = fit.thr;
+        self.leafval = fit.leafval;
+        self.fi_gain = fit.fi_gain;
+        self.fi_count = fit.fi_count;
+        Ok(t0.elapsed())
     }
 
     pub fn fit_profiled(&mut self, ds: &Dataset) -> Result<Profile, Err> {
@@ -129,8 +173,8 @@ impl Booster {
     }
 
     fn fit_inner(&mut self, ds: &Dataset, profile: bool) -> Result<Profile, Err> {
-        let stream = self.ctx.default_stream();
-        let module = kernels::load(&self.ctx)?;
+        let stream = self.gpu_ctx().default_stream();
+        let module = kernels::load(self.gpu_ctx())?;
 
         let n = ds.n_train;
         let nf = ds.n_features;
@@ -198,9 +242,13 @@ impl Booster {
         let mut hist_a_h = DeviceBuffer::<f32>::zeroed(&stream, replicas * max_groups * nf * nb)?;
         let mut hist_b_g = DeviceBuffer::<f32>::zeroed(&stream, replicas * max_groups * nf * nb)?;
         let mut hist_b_h = DeviceBuffer::<f32>::zeroed(&stream, replicas * max_groups * nf * nb)?;
-        // Transient f16 accumulation buffers (used only with --f16-hist).
+        // Transient f16 accumulation buffers (opt-in `--features f16-hist`; the f16 atomic
+        // is not in stock cuda-oxide).
+        #[cfg(feature = "f16-hist")]
         let f16_len = if self.cfg.f16_hist { replicas * max_groups * nf * nb } else { 1 };
+        #[cfg(feature = "f16-hist")]
         let mut hist16_g = DeviceBuffer::<f16>::zeroed(&stream, f16_len)?;
+        #[cfg(feature = "f16-hist")]
         let mut hist16_h = DeviceBuffer::<f16>::zeroed(&stream, f16_len)?;
         // Transient fixed-point i32 accumulation buffers (used only with --int-hist).
         let int_len = if self.cfg.int_hist { replicas * max_groups * nf * nb } else { 1 };
@@ -278,13 +326,24 @@ impl Booster {
                 let even_level = d % 2 == 0;
                 // Shared-mem path when this level's histogram fits a 32 KB block scratchpad.
                 let smem = self.cfg.smem_hist && groups * nb <= 4096;
+                #[cfg(feature = "f16-hist")]
                 let f16 = self.cfg.f16_hist && !smem;
+                #[cfg(not(feature = "f16-hist"))]
+                let f16 = false;
                 let int = self.cfg.int_hist && !smem && !f16;
                 // Zero: the transient int/f16 buffer, or the current f32 buffer (parent kept).
-                if int {
-                    module.zero2_i32(&stream, elems(total_hist), &mut histi_g, &mut histi_h, total_hist as u32)?;
-                } else if f16 {
+                #[cfg(feature = "f16-hist")]
+                let did_zero_f16 = if f16 {
                     module.zero2_f16(&stream, elems(total_hist), &mut hist16_g, &mut hist16_h, total_hist as u32)?;
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(feature = "f16-hist"))]
+                let did_zero_f16 = false;
+                if did_zero_f16 {
+                } else if int {
+                    module.zero2_i32(&stream, elems(total_hist), &mut histi_g, &mut histi_h, total_hist as u32)?;
                 } else {
                     let zero_len = if smem { hist_len } else { total_hist };
                     if even_level {
@@ -304,7 +363,23 @@ impl Booster {
                 // Levels >= 1 build only the odd (right) children, then derive even ones.
                 let use_sub = self.cfg.subtract && d >= 1;
                 let odd_only = if use_sub { 1u32 } else { 0u32 };
-                if smem {
+                // f16 build path (opt-in): folded to the f32 `cur` buffer.
+                #[cfg(feature = "f16-hist")]
+                let did_build_f16 = if f16 {
+                    module.build_hist_f16(&stream, elems(n), hist_bins, &leaf_dev, &g_dev, &h_dev,
+                        &hist16_g, &hist16_h, n as u32, nf as u32, nb as u32,
+                        replicas as u32, hist_len as u32, self.cfg.subsample, tree_seed, odd_only,
+                        packed_flag, bin_stride)?;
+                    module.reduce2_f16to32(&stream, elems(hist_len), &hist16_g, &hist16_h,
+                        cur_g, cur_h, replicas as u32, hist_len as u32)?;
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(feature = "f16-hist"))]
+                let did_build_f16 = false;
+                if did_build_f16 {
+                } else if smem {
                     let n_tiles = ((n + 8191) / 8192).clamp(1, 4096) as u32;
                     let cfg_smem = LaunchConfig {
                         grid_dim: (nf as u32, n_tiles, 1),
@@ -322,14 +397,6 @@ impl Booster {
                         packed_flag, bin_stride, self.cfg.int_scale)?;
                     module.reduce2_int_to_f32(&stream, elems(hist_len), &histi_g, &histi_h,
                         cur_g, cur_h, replicas as u32, hist_len as u32, 1.0 / self.cfg.int_scale)?;
-                } else if f16 {
-                    // f16 atomics into the transient buffer, folded to the f32 cur buffer.
-                    module.build_hist_f16(&stream, elems(n), hist_bins, &leaf_dev, &g_dev, &h_dev,
-                        &hist16_g, &hist16_h, n as u32, nf as u32, nb as u32,
-                        replicas as u32, hist_len as u32, self.cfg.subsample, tree_seed, odd_only,
-                        packed_flag, bin_stride)?;
-                    module.reduce2_f16to32(&stream, elems(hist_len), &hist16_g, &hist16_h,
-                        cur_g, cur_h, replicas as u32, hist_len as u32)?;
                 } else {
                     module.build_hist(&stream, elems(n), hist_bins, &leaf_dev, &g_dev, &h_dev,
                         cur_g, cur_h, n as u32, nf as u32, nb as u32,
@@ -408,8 +475,8 @@ impl Booster {
 
     /// Score `n` row-major rows. Returns `(raw_margins, gpu_inference_time)`.
     pub fn predict(&self, x: &[f32], n: usize) -> Result<(Vec<f32>, Duration), Err> {
-        let stream = self.ctx.default_stream();
-        let module = kernels::load(&self.ctx)?;
+        let stream = self.gpu_ctx().default_stream();
+        let module = kernels::load(self.gpu_ctx())?;
         let nf = self.n_features;
 
         // Apply categorical encoding to the test features (no-op if none configured).
@@ -435,8 +502,8 @@ impl Booster {
 
     /// PGBM predictive standard deviation per row (sqrt of summed per-leaf variances).
     pub fn predict_std(&self, x: &[f32], n: usize) -> Result<Vec<f32>, Err> {
-        let stream = self.ctx.default_stream();
-        let module = kernels::load(&self.ctx)?;
+        let stream = self.gpu_ctx().default_stream();
+        let module = kernels::load(self.gpu_ctx())?;
         let nf = self.n_features;
         let mut xt = x.to_vec();
         if !self.cfg.categorical.is_empty() {
@@ -489,8 +556,8 @@ impl Booster {
         batches: &[usize],
         repeats: usize,
     ) -> Result<Vec<(usize, f64)>, Err> {
-        let stream = self.ctx.default_stream();
-        let module = kernels::load(&self.ctx)?;
+        let stream = self.gpu_ctx().default_stream();
+        let module = kernels::load(self.gpu_ctx())?;
         let nf = self.n_features;
         // Model uploaded once and kept resident (as a real inference server would).
         let feat_dev = DeviceBuffer::from_host(&stream, &self.feat)?;
@@ -528,8 +595,8 @@ impl Booster {
     /// and report mean ns/row. Stops at the first allocation that fails (VRAM ceiling).
     /// Returns `(rows, ns_per_row, ok)`.
     pub fn bench_throughput(&self, rows: &[usize], repeats: usize) -> Result<Vec<(usize, f64, bool)>, Err> {
-        let stream = self.ctx.default_stream();
-        let module = kernels::load(&self.ctx)?;
+        let stream = self.gpu_ctx().default_stream();
+        let module = kernels::load(self.gpu_ctx())?;
         let nf = self.n_features;
         let feat_dev = DeviceBuffer::from_host(&stream, &self.feat)?;
         let thr_dev = DeviceBuffer::from_host(&stream, &self.thr)?;
@@ -586,8 +653,8 @@ impl Booster {
         batches: &[usize],
         repeats: usize,
     ) -> Result<Vec<(usize, f64)>, Err> {
-        let stream = self.ctx.default_stream();
-        let module = kernels::load(&self.ctx)?;
+        let stream = self.gpu_ctx().default_stream();
+        let module = kernels::load(self.gpu_ctx())?;
         let nf = self.n_features;
         let feat_dev = DeviceBuffer::from_host(&stream, &self.feat)?;
         let thr_dev = DeviceBuffer::from_host(&stream, &self.thr)?;
@@ -596,8 +663,8 @@ impl Booster {
         let maxb = batches.iter().copied().max().unwrap_or(1).min(n_rows).max(1);
         let x_dev = DeviceBuffer::<f32>::zeroed(&stream, maxb * nf)?;
         let mut out_dev = DeviceBuffer::<f32>::zeroed(&stream, maxb)?;
-        let mut pin_in = PinnedHostBuffer::<f32>::zeroed(&self.ctx, maxb * nf)?;
-        let mut pin_out = PinnedHostBuffer::<f32>::zeroed(&self.ctx, maxb)?;
+        let mut pin_in = PinnedHostBuffer::<f32>::zeroed(self.gpu_ctx(), maxb * nf)?;
+        let mut pin_out = PinnedHostBuffer::<f32>::zeroed(self.gpu_ctx(), maxb)?;
         let s = stream.cu_stream();
         let dptr_x = x_dev.cu_deviceptr();
         let dptr_out = out_dev.cu_deviceptr();

@@ -11,9 +11,10 @@
 //! `&[f32] -> DeviceAtomicF32` pointer-cast pattern (each bin is shared across
 //! threads), matching the repo's `atomics` example.
 
-use cuda_device::atomic::{
-    AtomicOrdering, BlockAtomicF32, DeviceAtomicF16, DeviceAtomicF32, DeviceAtomicI32,
-};
+use cuda_device::atomic::{AtomicOrdering, BlockAtomicF32, DeviceAtomicF32, DeviceAtomicI32};
+// f16 atomics are not in stock cuda-oxide; the f16 histogram path is opt-in via `f16-hist`.
+#[cfg(feature = "f16-hist")]
+use cuda_device::atomic::DeviceAtomicF16;
 use cuda_device::{DisjointSlice, SharedArray, cuda_module, kernel, thread};
 
 /// Internal accumulator precision for histogram cumulation / gain / replica folding.
@@ -34,6 +35,7 @@ fn atomic_add_f32(slice: &[f32], idx: usize, val: f32) {
 
 /// Half-precision atomic add (hardware `atom.add.noftz.f16`). Halves the atomic write
 /// traffic of the histogram build; precision is recovered by folding to f32 in reduce.
+#[cfg(feature = "f16-hist")]
 #[inline(always)]
 fn atomic_add_f16(slice: &[f16], idx: usize, val: f16) {
     unsafe {
@@ -318,6 +320,7 @@ pub mod kernels {
 
     /// Zero the first `n` elements of two `f16` buffers in one launch.
     #[kernel]
+    #[cfg(feature = "f16-hist")]
     pub fn zero2_f16(mut a: DisjointSlice<f16>, mut b: DisjointSlice<f16>, n: u32) {
         if thread::index_1d().get() >= n as usize {
             return;
@@ -335,6 +338,7 @@ pub mod kernels {
     /// values are folded back to f32 by `reduce2_f16to32`. Same semantics/params as
     /// `build_hist` otherwise.
     #[kernel]
+    #[cfg(feature = "f16-hist")]
     pub fn build_hist_f16(
         bins: &[u8],
         leaf: &[u32],
@@ -390,6 +394,7 @@ pub mod kernels {
     /// Fold `n_replicas` f16 histogram copies (each `stride` long) into f32 outputs,
     /// accumulating in f32 to recover precision.
     #[kernel]
+    #[cfg(feature = "f16-hist")]
     pub fn reduce2_f16to32(
         src_g: &[f16],
         src_h: &[f16],

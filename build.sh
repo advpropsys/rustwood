@@ -8,7 +8,7 @@
 # Produces target/release/rustwood.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OXIDE_REPO="$(cd "$HERE/../cuda-oxide" && pwd)"
+OXIDE_REPO="$(cd "$HERE/external/cuda-oxide" && pwd)"
 ARCH="${ARCH:-sm_103}"
 
 export CUDA_PATH="${CUDA_PATH:-/usr/local/cuda}"

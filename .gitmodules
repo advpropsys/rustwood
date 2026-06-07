@@ -1,0 +1,4 @@
+[submodule "external/cuda-oxide"]
+	path = external/cuda-oxide
+	url = https://github.com/advpropsys/cuda-oxide.git
+	branch = feat/f16-atomic

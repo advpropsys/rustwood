@@ -7,9 +7,12 @@
 //!       --data crates/rustc-codegen-cuda/examples/rustwood/data \
 //!       --trees 500 --depth 6 --lr 0.1 --bins 256 --objective logistic
 
-#![feature(f16)]
+// The f16 histogram path needs the nightly `f16` type + an f16 atomic not in stock
+// cuda-oxide; both are opt-in via `--features f16-hist`.
+#![cfg_attr(feature = "f16-hist", feature(f16))]
 
 mod booster;
+mod cpu;
 mod config;
 mod data;
 mod encoding;
@@ -17,7 +20,7 @@ mod gpu_kernels;
 mod metrics;
 
 use booster::Booster;
-use config::{Config, Objective};
+use config::{Config, Device, Objective};
 use data::Dataset;
 
 /// Validate that shared-memory BlockAtomicF32 works (lowers to `atom.shared`).
@@ -62,9 +65,10 @@ fn main() {
     let objective = cfg.objective;
     let profile_out = cfg.profile_out.clone();
     let dump_pred = cfg.dump_pred.clone();
-    let pgbm = cfg.pgbm;
-    let latency_bench = cfg.latency_bench;
-    let throughput_bench = cfg.throughput_bench;
+    let pgbm = cfg.pgbm && cfg.device == Device::Gpu;
+    let latency_bench = cfg.latency_bench && cfg.device == Device::Gpu;
+    let throughput_bench = cfg.throughput_bench && cfg.device == Device::Gpu;
+    let device = cfg.device;
     let mut booster = Booster::new(cfg).expect("init CUDA context / load PTX module");
 
     let train_time = if profile_out.is_empty() {
@@ -146,11 +150,18 @@ fn main() {
         }
     }
 
-    let (scores, infer_time) = booster.predict(&ds.x_test, ds.n_test).expect("prediction failed");
+    let (scores, infer_time) = if device == Device::Cpu {
+        let mut s = vec![0.0f32; ds.n_test];
+        let t0 = std::time::Instant::now();
+        booster.predict_cpu(&ds.x_test, ds.n_test, &mut s);
+        (s, t0.elapsed())
+    } else {
+        booster.predict(&ds.x_test, ds.n_test).expect("prediction failed")
+    };
 
-    // CPU inference path: time the host oblivious traversal over the full test set and
-    // verify it matches the GPU kernel bit-for-bit (same forest, same f32 accumulation).
-    {
+    // GPU runs: time the host oblivious traversal and verify it matches the GPU kernel
+    // bit-for-bit (same forest, same f32 accumulation).
+    if device == Device::Gpu {
         let mut cpu = vec![0.0f32; ds.n_test];
         let t0 = std::time::Instant::now();
         booster.predict_cpu(&ds.x_test, ds.n_test, &mut cpu);

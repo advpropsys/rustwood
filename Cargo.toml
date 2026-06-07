@@ -5,20 +5,25 @@ edition = "2024"
 license = "Apache-2.0"
 description = "GPU oblivious-tree gradient boosting with kernels written in pure Rust (cuda-oxide / Blackwell)"
 
-# Standalone crate (detached from any parent workspace).
+# Standalone crate (detached from any parent workspace). Exclude the vendored cuda-oxide
+# submodule so its crates resolve against their own workspace, not rustwood's.
 [workspace]
+exclude = ["external/cuda-oxide"]
 
 [features]
 # Accumulate histogram cumulation / gain / replica-fold in f64 instead of f32
 # (storage stays f32 — no extra memory). Build with: ./build.sh --features f64-hist
 f64-hist = []
+# f16 histogram path (needs a cuda-oxide with the f16 atomic; not in stock upstream).
+f16-hist = []
 
 [dependencies]
 # cuda-oxide device/host/runtime crates (sibling checkout).
-cuda-device = { path = "../cuda-oxide/crates/cuda-device" }
-cuda-host = { path = "../cuda-oxide/crates/cuda-host" }
-cuda-core = { path = "../cuda-oxide/crates/cuda-core" }
-cuda-bindings = { path = "../cuda-oxide/crates/cuda-bindings" }
+cuda-device = { path = "external/cuda-oxide/crates/cuda-device" }
+cuda-host = { path = "external/cuda-oxide/crates/cuda-host" }
+cuda-core = { path = "external/cuda-oxide/crates/cuda-core" }
+cuda-bindings = { path = "external/cuda-oxide/crates/cuda-bindings" }
+rayon = "1.11"
 
 [[bin]]
 name = "rustwood"

@@ -8,6 +8,13 @@ pub enum Objective {
     SquaredError,
 }
 
+/// Training device. `Cpu` runs the host oblivious-tree trainer with no CUDA context.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Device {
+    Gpu,
+    Cpu,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub data_dir: String,
@@ -56,6 +63,8 @@ pub struct Config {
     /// Rows sampled (strided) to estimate per-feature bin boundaries.
     pub bin_sample: usize,
     pub gpu: usize,
+    /// Training device (gpu = CUDA kernels, cpu = host oblivious-tree trainer).
+    pub device: Device,
     /// Histogram privatization factor (global accumulator copies) to cut atomic
     /// contention. Capped by a memory budget at runtime.
     pub replicas: usize,
@@ -101,6 +110,7 @@ impl Default for Config {
             objective: Objective::Logistic,
             bin_sample: 200_000,
             gpu: 0,
+            device: Device::Gpu,
             replicas: 64,
             profile_out: String::new(),
             dump_pred: String::new(),
@@ -161,6 +171,13 @@ impl Config {
                 }
                 "--bin-sample" => cfg.bin_sample = val().parse().unwrap(),
                 "--gpu" => cfg.gpu = val().parse().unwrap(),
+                "--device" => {
+                    cfg.device = match val().as_str() {
+                        "gpu" | "cuda" => Device::Gpu,
+                        "cpu" | "host" => Device::Cpu,
+                        other => panic!("unknown device {other}"),
+                    }
+                }
                 "--replicas" => cfg.replicas = val().parse().unwrap(),
                 "--profile-out" => cfg.profile_out = val().clone(),
                 "--dump-pred" => cfg.dump_pred = val().clone(),
