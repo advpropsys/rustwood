@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -61,6 +62,61 @@ def _run(args):
     return out.stdout
 
 
+class _Server:
+    """A persistent ``rustwood --serve`` worker. Holds one resident CUDA context, so the
+    ~400 ms init is paid once per process instead of per fit. Shared across all models in
+    the session; set ``RUSTWOOD_NO_SERVER=1`` to fall back to one-shot subprocesses."""
+
+    _instance = None
+
+    @classmethod
+    def get(cls):
+        if cls._instance is None or cls._instance.p.poll() is not None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        self.p = subprocess.Popen([find_binary(), "--serve", "1"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True, bufsize=1)
+
+    def run(self, args):
+        self.p.stdin.write("\t".join(args) + "\n")
+        self.p.stdin.flush()
+        out = []
+        for line in self.p.stdout:
+            line = line.rstrip("\n")
+            if line == "__END__":
+                break
+            out.append(line)
+        resp = out[-1] if out else ""
+        if not resp.startswith("OK"):
+            raise RuntimeError("rustwood serve error: " + "\n".join(out[-5:]))
+        return resp
+
+
+def _exec(args):
+    """Run an arg list through the persistent worker (or one-shot if disabled). Returns the
+    worker's ``OK ...`` line (or the one-shot stdout)."""
+    if os.environ.get("RUSTWOOD_NO_SERVER"):
+        return _run([find_binary()] + args)
+    return _Server.get().run(args)
+
+
+import atexit
+
+
+@atexit.register
+def _shutdown_server():
+    s = _Server._instance
+    if s is not None and s.p.poll() is None:
+        try:
+            s.p.stdin.write("QUIT\n")
+            s.p.stdin.flush()
+            s.p.wait(timeout=2)
+        except Exception:
+            s.p.terminate()
+
+
 class _Model:
     _objective = "l2"
 
@@ -96,7 +152,9 @@ class _Model:
         self._owns_model = True
         with tempfile.TemporaryDirectory() as d:
             _write_blobs(d, X, y, X[:2], y[:2])  # dummy test set to satisfy the loader
-            _run([self._bin, "--data", d] + self._train_args() + ["--save-model", self._model_path])
+            resp = _exec(["--data", d] + self._train_args() + ["--save-model", self._model_path])
+        m = re.search(r"train_s=([0-9.]+)", resp)
+        self.train_time_ = float(m.group(1)) if m else None  # GPU/CPU compute time (s)
         return self
 
     def _raw_predict(self, X):
@@ -107,7 +165,7 @@ class _Model:
             preds = os.path.join(d, "p.bin")
             z = np.zeros(max(2, len(X)), np.float32)
             _write_blobs(d, X[:2], z[:2], X, z[:len(X)])  # X as the test set
-            _run([self._bin, "--data", d, "--load-model", self._model_path, "--dump-pred", preds])
+            _exec(["--data", d, "--load-model", self._model_path, "--dump-pred", preds])
             return np.fromfile(preds, np.float32)
 
     def save(self, path):

@@ -50,6 +50,10 @@ fn main() {
         return;
     }
     let cfg = Config::from_args();
+    if cfg.serve {
+        serve(cfg.gpu);
+        return;
+    }
 
     let ds = Dataset::load(&cfg.data_dir);
     println!("=== rustwood: GPU oblivious-tree GBDT (cuda-oxide / sm_103 / B300) ===");
@@ -294,4 +298,80 @@ fn main() {
             );
         }
     }
+}
+
+/// Persistent worker: read tab-separated arg lines from stdin, run each as a fit or a
+/// load+predict reusing one resident CUDA context, and reply with a status line + `__END__`.
+/// Lets a client pay the ~400 ms CUDA init once instead of per call.
+fn serve(gpu: usize) {
+    use std::io::{BufRead, Write};
+    let mut ctx: Option<std::sync::Arc<cuda_core::CudaContext>> = None;
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "QUIT" {
+            break;
+        }
+        let tokens: Vec<String> = line.split('\t').map(String::from).collect();
+        let resp = serve_handle(tokens, gpu, &mut ctx);
+        let _ = writeln!(out, "{resp}\n__END__");
+        let _ = out.flush();
+    }
+}
+
+fn serve_handle(
+    tokens: Vec<String>, gpu: usize, ctx: &mut Option<std::sync::Arc<cuda_core::CudaContext>>,
+) -> String {
+    let cfg = Config::from_tokens(tokens);
+    let ds = Dataset::load(&cfg.data_dir);
+    if !cfg.load_model.is_empty() {
+        let booster = match Booster::load_model(&cfg.load_model) {
+            Ok(b) => b,
+            Err(e) => return format!("ERROR load {e}"),
+        };
+        let scores = booster.predict_host(&ds.x_test, ds.n_test);
+        if !cfg.dump_pred.is_empty() {
+            let mut bytes = Vec::with_capacity(scores.len() * 4);
+            for &s in &scores {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            if let Err(e) = std::fs::write(&cfg.dump_pred, &bytes) {
+                return format!("ERROR dump {e}");
+            }
+        }
+        return format!("OK n={}", scores.len());
+    }
+    // fit: CPU has no context; GPU reuses the resident one (lazily created once).
+    let mut booster = if cfg.device == Device::Cpu {
+        match Booster::new(cfg.clone()) {
+            Ok(b) => b,
+            Err(e) => return format!("ERROR new {e}"),
+        }
+    } else {
+        if ctx.is_none() {
+            match cuda_core::CudaContext::new(gpu) {
+                Ok(c) => *ctx = Some(c),
+                Err(e) => return format!("ERROR ctx {e}"),
+            }
+        }
+        Booster::with_ctx(cfg.clone(), ctx.clone().unwrap())
+    };
+    let t = match booster.fit(&ds) {
+        Ok(t) => t,
+        Err(e) => return format!("ERROR fit {e}"),
+    };
+    if !cfg.save_model.is_empty() {
+        if let Err(e) = booster.save_model(&cfg.save_model) {
+            return format!("ERROR save {e}");
+        }
+    }
+    format!("OK train_s={:.6}", t.as_secs_f64())
 }

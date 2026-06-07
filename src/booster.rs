@@ -125,6 +125,14 @@ impl Booster {
         self.ctx.as_ref().expect("GPU context unavailable (device = cpu)")
     }
 
+    /// Construct a booster that reuses an existing CUDA context (the `--serve` worker keeps
+    /// one resident so the ~400 ms init is paid once, not per fit).
+    pub fn with_ctx(cfg: Config, ctx: Arc<CudaContext>) -> Self {
+        Self { ctx: Some(ctx), cfg, n_features: 0, base_score: 0.0, feat: Vec::new(),
+            thr: Vec::new(), leafval: Vec::new(), encoders: Vec::new(), gmean: 0.0,
+            fi_gain: Vec::new(), fi_count: Vec::new(), leafvar: Vec::new() }
+    }
+
     pub fn config(&self) -> &Config {
         &self.cfg
     }

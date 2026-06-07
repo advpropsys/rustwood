@@ -82,6 +82,9 @@ pub struct Config {
     pub latency_bench: bool,
     /// If true, run a device-resident peak-throughput sweep up to the VRAM ceiling.
     pub throughput_bench: bool,
+    /// Persistent worker: read tab-separated arg lines from stdin, keeping the CUDA
+    /// context resident so the ~400 ms init is paid once.
+    pub serve: bool,
 }
 
 impl Default for Config {
@@ -122,6 +125,7 @@ impl Default for Config {
             load_model: String::new(),
             latency_bench: false,
             throughput_bench: false,
+            serve: false,
         }
     }
 }
@@ -129,8 +133,12 @@ impl Default for Config {
 impl Config {
     /// Parse `--key value` flags; unknown keys abort with a usage message.
     pub fn from_args() -> Self {
+        Self::from_tokens(std::env::args().skip(1).collect())
+    }
+
+    /// Parse a token vector into a Config (shared by `from_args` and the `--serve` loop).
+    pub fn from_tokens(args: Vec<String>) -> Self {
         let mut cfg = Config::default();
-        let args: Vec<String> = std::env::args().skip(1).collect();
         let mut i = 0;
         while i < args.len() {
             let key = args[i].as_str();
@@ -192,6 +200,7 @@ impl Config {
                 // Takes a value (1/true) to keep the simple key-value parser intact.
                 "--latency-bench" => cfg.latency_bench = matches!(val().as_str(), "1" | "true"),
                 "--throughput-bench" => cfg.throughput_bench = matches!(val().as_str(), "1" | "true"),
+                "--serve" => cfg.serve = matches!(val().as_str(), "1" | "true"),
                 "--objective" => {
                     cfg.objective = match val().as_str() {
                         "logistic" | "binary" => Objective::Logistic,
