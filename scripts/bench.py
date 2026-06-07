@@ -105,7 +105,7 @@ def run_rustwood(data_dir, gpu=0):
 
 
 def run_xgb(Xtr, ytr, Xte, yte):
-    import xrustwood as xgb
+    import xgboost as xgb
     m = xgb.XGBRegressor(n_estimators=N_TREES, max_depth=MAX_DEPTH, learning_rate=LR,
                          reg_lambda=L2, tree_method="hist", device="cuda",
                          max_bin=MAX_BIN, objective="reg:squarederror")
@@ -170,7 +170,7 @@ def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost):
           f"features={X.shape[1]}\n{'=' * 78}")
 
     runners = [("rustwood", lambda: run_rustwood(data_dir, gpu)),
-               ("xrustwood", lambda: run_xgb(Xtr, ytr, Xte, yte)),
+               ("xgboost", lambda: run_xgb(Xtr, ytr, Xte, yte)),
                ("lightgbm", lambda: run_lgbm(Xtr, ytr, Xte, yte)),
                ("baseline", lambda: run_baseline(Xtr, ytr, Xte, yte))]
     if want_catboost:

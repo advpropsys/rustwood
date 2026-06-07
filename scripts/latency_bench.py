@@ -21,15 +21,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import style
+style.apply()
+
 N_TREES, MAX_DEPTH, LR, L2, MAX_BIN = 100, 6, 0.1, 1.0, 256
 BATCHES = [1, 8, 64, 512, 4096, 32768, 131072]
 COLORS = {
-    "rustwood-GPU (B300)": "#d81e5b",
-    "rustwood-GPU-fast (reuse+spin)": "#f48fb1",
-    "rustwood-CPU": "#7b1fa2",
-    "XGBoost-GPU": "#1f77b4",
-    "LightGBM-CPU": "#2ca02c",
-    "baseline (CPU)": "#ff7f0e",
+    "rustwood-GPU (B300)": "#D55E00",
+    "rustwood-GPU-fast (reuse+spin)": "#E69F00",
+    "rustwood-CPU": "#9467bd",
+    "XGBoost-GPU": "#0072B2",
+    "LightGBM-CPU": "#009E73",
+    "baseline (CPU)": "#CC79A7",
 }
 
 
@@ -95,8 +100,8 @@ def main():
     series["rustwood-GPU-fast (reuse+spin)"] = fast
     series["rustwood-CPU"] = cpu
 
-    print("xrustwood ...", flush=True)
-    import xrustwood as xgb
+    print("xgboost ...", flush=True)
+    import xgboost as xgb
     xm = xgb.XGBRegressor(n_estimators=N_TREES, max_depth=MAX_DEPTH, learning_rate=LR,
                           reg_lambda=L2, tree_method="hist", device="cuda", max_bin=MAX_BIN)
     xm.fit(Xtr, ytr)
@@ -132,7 +137,7 @@ def main():
     plt.grid(True, which="both", ls=":", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out, "infer_latency_perrow.png"), dpi=300)
+    plt.savefig(os.path.join(args.out, "infer_latency_perrow.png"))
     plt.close()
 
     # ---- per-call latency (us) vs batch ----
@@ -148,7 +153,7 @@ def main():
     plt.grid(True, which="both", ls=":", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out, "infer_latency_percall.png"), dpi=300)
+    plt.savefig(os.path.join(args.out, "infer_latency_percall.png"))
     plt.close()
 
     print("\nbatch |        rustwood |       XGBoost |      LightGBM |        baseline   (ns/row)")

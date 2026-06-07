@@ -431,52 +431,12 @@
 <text id="matched" x="1290.00" y="165" > </text>
 <g id="frames">
 <g >
-<title>histogram (104,215,172 ns, 81.40%)</title><rect x="21.9" y="65" width="1123.3" height="27.0" fill="rgb(221,76,18)" rx="2" ry="2" />
-<text  x="24.86" y="81.5" >histogram</text>
-</g>
-<g >
-<title>leaf_hist (2,193,446 ns, 1.71%)</title><rect x="1145.2" y="37" width="23.6" height="27.0" fill="rgb(221,77,18)" rx="2" ry="2" />
-<text  x="1148.15" y="53.5" >l..</text>
-</g>
-<g >
 <title>gradient (1,099,967 ns, 0.86%)</title><rect x="10.0" y="65" width="11.9" height="27.0" fill="rgb(248,200,47)" rx="2" ry="2" />
 <text  x="13.00" y="81.5" ></text>
 </g>
 <g >
-<title>leaf_reduce (3,787,249 ns, 2.96%)</title><rect x="1145.2" y="65" width="40.8" height="27.0" fill="rgb(231,122,29)" rx="2" ry="2" />
-<text  x="1148.15" y="81.5" >lea..</text>
-</g>
-<g >
 <title>split_find (18,928,613 ns, 14.78%)</title><rect x="1186.0" y="65" width="204.0" height="27.0" fill="rgb(214,43,10)" rx="2" ry="2" />
 <text  x="1188.98" y="81.5" >split_find</text>
-</g>
-<g >
-<title>leaf_values (758,156 ns, 0.59%)</title><rect x="1168.8" y="37" width="8.2" height="27.0" fill="rgb(226,99,23)" rx="2" ry="2" />
-<text  x="1171.80" y="53.5" ></text>
-</g>
-<g >
-<title>rustwood_train (128,031,001 ns, 100.00%)</title><rect x="10.0" y="93" width="1380.0" height="27.0" fill="rgb(215,47,11)" rx="2" ry="2" />
-<text  x="13.00" y="109.5" >rustwood_train</text>
-</g>
-<g >
-<title>all (128,031,001 ns, 100%)</title><rect x="10.0" y="121" width="1380.0" height="27.0" fill="rgb(213,39,9)" rx="2" ry="2" />
-<text  x="13.00" y="137.5" ></text>
-</g>
-<g >
-<title>gradients (1,099,967 ns, 0.86%)</title><rect x="10.0" y="37" width="11.9" height="27.0" fill="rgb(205,2,0)" rx="2" ry="2" />
-<text  x="13.00" y="53.5" ></text>
-</g>
-<g >
-<title>update_pred (835,647 ns, 0.65%)</title><rect x="1177.0" y="37" width="9.0" height="27.0" fill="rgb(237,150,36)" rx="2" ry="2" />
-<text  x="1179.97" y="53.5" ></text>
-</g>
-<g >
-<title>zero_hist (9,599,233 ns, 7.50%)</title><rect x="1041.7" y="37" width="103.5" height="27.0" fill="rgb(213,38,9)" rx="2" ry="2" />
-<text  x="1044.69" y="53.5" >zero_hist</text>
-</g>
-<g >
-<title>apply_split (4,899,548 ns, 3.83%)</title><rect x="1186.0" y="37" width="52.8" height="27.0" fill="rgb(205,1,0)" rx="2" ry="2" />
-<text  x="1188.98" y="53.5" >apply..</text>
 </g>
 <g >
 <title>build_hist (94,615,939 ns, 73.90%)</title><rect x="21.9" y="37" width="1019.8" height="27.0" fill="rgb(246,191,45)" rx="2" ry="2" />
@@ -489,6 +449,46 @@
 <g >
 <title>split_gain (8,330,268 ns, 6.51%)</title><rect x="1300.2" y="37" width="89.8" height="27.0" fill="rgb(227,102,24)" rx="2" ry="2" />
 <text  x="1303.21" y="53.5" >split_gain</text>
+</g>
+<g >
+<title>all (128,031,001 ns, 100%)</title><rect x="10.0" y="121" width="1380.0" height="27.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="137.5" ></text>
+</g>
+<g >
+<title>apply_split (4,899,548 ns, 3.83%)</title><rect x="1186.0" y="37" width="52.8" height="27.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="1188.98" y="53.5" >apply..</text>
+</g>
+<g >
+<title>leaf_reduce (3,787,249 ns, 2.96%)</title><rect x="1145.2" y="65" width="40.8" height="27.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="1148.15" y="81.5" >lea..</text>
+</g>
+<g >
+<title>leaf_values (758,156 ns, 0.59%)</title><rect x="1168.8" y="37" width="8.2" height="27.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="1171.80" y="53.5" ></text>
+</g>
+<g >
+<title>rustwood_train (128,031,001 ns, 100.00%)</title><rect x="10.0" y="93" width="1380.0" height="27.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="13.00" y="109.5" >rustwood_train</text>
+</g>
+<g >
+<title>histogram (104,215,172 ns, 81.40%)</title><rect x="21.9" y="65" width="1123.3" height="27.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="24.86" y="81.5" >histogram</text>
+</g>
+<g >
+<title>zero_hist (9,599,233 ns, 7.50%)</title><rect x="1041.7" y="37" width="103.5" height="27.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="1044.69" y="53.5" >zero_hist</text>
+</g>
+<g >
+<title>gradients (1,099,967 ns, 0.86%)</title><rect x="10.0" y="37" width="11.9" height="27.0" fill="rgb(205,2,0)" rx="2" ry="2" />
+<text  x="13.00" y="53.5" ></text>
+</g>
+<g >
+<title>update_pred (835,647 ns, 0.65%)</title><rect x="1177.0" y="37" width="9.0" height="27.0" fill="rgb(237,150,36)" rx="2" ry="2" />
+<text  x="1179.97" y="53.5" ></text>
+</g>
+<g >
+<title>leaf_hist (2,193,446 ns, 1.71%)</title><rect x="1145.2" y="37" width="23.6" height="27.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="1148.15" y="53.5" >l..</text>
 </g>
 </g>
 </svg>

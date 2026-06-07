@@ -19,11 +19,17 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import style  # noqa: E402
+
+style.apply()
 
 # Group flat kernel categories into pipeline phases for a readable flame.
 PHASE = {
@@ -37,12 +43,8 @@ PHASE = {
     "leaf_values": "leaf_reduce",
     "update_pred": "leaf_reduce",
 }
-COLORS = {
-    "rustwood (B300)": "#d81e5b",
-    "XGBoost-GPU": "#1f77b4",
-    "LightGBM-gpu": "#2ca02c",
-    "baseline (CPU)": "#ff7f0e",
-}
+COLORS = {n: style.color(n) for n in
+          ["rustwood (B300)", "XGBoost-GPU", "LightGBM-gpu", "baseline (CPU)"]}
 FLAMEGRAPH_PL = "flamegraph.pl"
 
 
@@ -97,7 +99,7 @@ def plot_train_time(results, out_png):
     plt.grid(True, which="both", ls=":", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200)
+    plt.savefig(out_png)
     plt.close()
     print("wrote", out_png)
 
@@ -121,7 +123,7 @@ def plot_infer(results, out_png):
     plt.grid(True, which="both", ls=":", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200)
+    plt.savefig(out_png)
     plt.close()
     print("wrote", out_png)
 
@@ -145,7 +147,7 @@ def plot_speedup(results, out_png):
     plt.legend()
     plt.grid(True, axis="y", ls=":", alpha=0.5)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200)
+    plt.savefig(out_png)
     plt.close()
     print("wrote", out_png)
 
@@ -168,7 +170,7 @@ def plot_accuracy(results, out_png):
     plt.legend()
     plt.grid(True, axis="y", ls=":", alpha=0.5)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200)
+    plt.savefig(out_png)
     plt.close()
     print("wrote", out_png)
 
@@ -207,7 +209,7 @@ def plot_iso_accuracy(results, rustwood_bin, data_dir, out_png):
     plt.grid(True, ls=":", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200)
+    plt.savefig(out_png)
     plt.close()
     print("wrote", out_png)
 
