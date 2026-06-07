@@ -61,6 +61,7 @@ fn main() {
 
     let objective = cfg.objective;
     let profile_out = cfg.profile_out.clone();
+    let dump_pred = cfg.dump_pred.clone();
     let pgbm = cfg.pgbm;
     let latency_bench = cfg.latency_bench;
     let throughput_bench = cfg.throughput_bench;
@@ -146,6 +147,18 @@ fn main() {
     }
 
     let (scores, infer_time) = booster.predict(&ds.x_test, ds.n_test).expect("prediction failed");
+
+    // Persist raw per-row test predictions for external callers (baseline rustwood backend).
+    // For SquaredError these are the regression outputs; for Logistic they are raw margins
+    // (apply the logistic link downstream to obtain probabilities).
+    if !dump_pred.is_empty() {
+        let mut bytes = Vec::with_capacity(scores.len() * 4);
+        for &s in &scores {
+            bytes.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(&dump_pred, &bytes).expect("write dump-pred");
+        println!("wrote {} test predictions -> {dump_pred}", scores.len());
+    }
 
     let cfg = booster.config();
     let train_s = train_time.as_secs_f64();

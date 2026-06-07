@@ -61,6 +61,11 @@ pub struct Config {
     pub replicas: usize,
     /// If non-empty, run a profiled fit and write a per-kernel ns breakdown here.
     pub profile_out: String,
+    /// If non-empty, write the raw test-set predictions (one little-endian f32 per
+    /// test row, in input order) to this path. Enables an external caller (e.g. the
+    /// baseline `rustwood` backend) to recover per-row predictions, which the metrics
+    /// line alone does not expose.
+    pub dump_pred: String,
     /// If true, after training run a per-batch end-to-end inference latency sweep.
     pub latency_bench: bool,
     /// If true, run a device-resident peak-throughput sweep up to the VRAM ceiling.
@@ -99,6 +104,7 @@ impl Default for Config {
             gpu: 0,
             replicas: 64,
             profile_out: String::new(),
+            dump_pred: String::new(),
             latency_bench: false,
             throughput_bench: false,
         }
@@ -158,6 +164,7 @@ impl Config {
                 "--gpu" => cfg.gpu = val().parse().unwrap(),
                 "--replicas" => cfg.replicas = val().parse().unwrap(),
                 "--profile-out" => cfg.profile_out = val().clone(),
+                "--dump-pred" => cfg.dump_pred = val().clone(),
                 // Takes a value (1/true) to keep the simple key-value parser intact.
                 "--latency-bench" => cfg.latency_bench = matches!(val().as_str(), "1" | "true"),
                 "--throughput-bench" => cfg.throughput_bench = matches!(val().as_str(), "1" | "true"),
