@@ -62,9 +62,8 @@ pub struct Config {
     /// If non-empty, run a profiled fit and write a per-kernel ns breakdown here.
     pub profile_out: String,
     /// If non-empty, write the raw test-set predictions (one little-endian f32 per
-    /// test row, in input order) to this path. Enables an external caller (e.g. the
-    /// baseline `rustwood` backend) to recover per-row predictions, which the metrics
-    /// line alone does not expose.
+    /// test row, in input order) to this path. Lets an external caller recover per-row
+    /// predictions, which the metrics line alone does not expose.
     pub dump_pred: String,
     /// If true, after training run a per-batch end-to-end inference latency sweep.
     pub latency_bench: bool,

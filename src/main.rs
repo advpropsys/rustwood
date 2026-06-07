@@ -148,7 +148,7 @@ fn main() {
 
     let (scores, infer_time) = booster.predict(&ds.x_test, ds.n_test).expect("prediction failed");
 
-    // Persist raw per-row test predictions for external callers (baseline rustwood backend).
+    // Persist raw per-row test predictions for external callers.
     // For SquaredError these are the regression outputs; for Logistic they are raw margins
     // (apply the logistic link downstream to obtain probabilities).
     if !dump_pred.is_empty() {
