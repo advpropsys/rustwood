@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fair real-data benchmark: rustwood vs XGBoost-GPU / LightGBM-GPU / baseline.
+"""Fair benchmark on named tabular datasets: rustwood vs XGBoost-GPU / LightGBM-GPU.
 
 Fairness controls
 -----------------
@@ -9,12 +9,12 @@ Fairness controls
   validation split (grid 0.05/0.1/0.2/0.3); the model is then refit on the full train
   set at its best lr and scored once on the untouched test set.
 * **Native categorical handling for every library** — XGBoost (`enable_categorical`),
-  LightGBM (pandas `category` dtype), rustwood (out-of-fold target encoding). baseline
-  uses ordinal codes (no categorical API). Missing values imputed identically.
+  LightGBM (pandas `category` dtype), rustwood (out-of-fold target encoding). Missing
+  values imputed identically.
 
 Datasets: Titanic, Credit-G, Bank-Marketing, Adult, Covertype (OpenML / sklearn).
-Reports test ROC-AUC, warm train time, inference time; writes results/real_results.json
-and the publication-style figures results/real_auc.png and results/real_train_time.png.
+Reports test ROC-AUC, warm train time, inference time; writes results/results.json
+and the publication-style figures results/dataset_auc.png and results/dataset_train_time.png.
 """
 import json
 import os
@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 import warnings
+from types import SimpleNamespace
 
 warnings.filterwarnings("ignore")
 import numpy as np
@@ -41,7 +42,7 @@ RESULTS = os.path.join(PROJECT, "results")
 TMP = "/tmp/rustwood_real"
 TREES, DEPTH = 200, 6
 LRS = [0.05, 0.1, 0.2, 0.3]
-LIBS = ["rustwood (B300)", "XGBoost-GPU", "LightGBM-GPU", "baseline (CPU)"]
+LIBS = ["rustwood (B300)", "XGBoost-GPU", "LightGBM-GPU"]
 
 
 # ------------------------------------------------------------------ data loaders
@@ -82,7 +83,7 @@ def preprocess(X: pd.DataFrame, y):
         s = X[col]
         if s.dtype.kind in "Obc" or str(s.dtype) == "category":
             codes = pd.Series(s.astype("object")).fillna("__NA__").astype("category")
-            num[col] = codes.cat.codes.astype(np.float32)  # ordinal for rustwood/baseline
+            num[col] = codes.cat.codes.astype(np.float32)  # ordinal codes (blob path)
             X[col] = codes                                 # category dtype for xgb/lgbm
             cat_idx.append(j)
         else:
@@ -159,41 +160,30 @@ def run_lgbm(Xi, yi, Xv, yv, Xf, yf, Xte, yte):
     return {"auc": roc_auc_score(yte, p), "train": tr, "pred": pt, "lr": best_lr}
 
 
-def run_baseline(Xi, yi, Xv, yv, Xf, yf, Xte, yte):
-    from baseline import BaselineRegressor
-
-    def fit(X, y, lr):
-        m = BaselineRegressor(n_estimators=TREES, max_depth=DEPTH, learning_rate=lr,
-                            n_bins=256, l2=1.0, backend="rust", random_state=42)
-        m.fit(X, y)
-        return m
-    best_lr = max(LRS, key=lambda lr: roc_auc_score(yv, np.asarray(fit(Xi, yi, lr).predict(Xv)).ravel()))
-    t = time.perf_counter(); m = fit(Xf, yf, best_lr); tr = time.perf_counter() - t
-    t = time.perf_counter(); p = np.asarray(m.predict(Xte)).ravel(); pt = time.perf_counter() - t
-    return {"auc": roc_auc_score(yte, p), "train": tr, "pred": pt, "lr": best_lr}
-
-
 # --------------------------------------------------------------------- plotting
 SHORT = {"rustwood (B300)": "rustwood", "XGBoost-GPU": "XGBoost",
-         "LightGBM-GPU": "LightGBM", "baseline (CPU)": "baseline"}
+         "LightGBM-GPU": "LightGBM"}
 
 
 def grouped_bar(results, key, ylabel, main, sub, fname, fmt, logy=False, ylim=None,
-                legend_loc="below", label_hero=True):
+                legend_loc="below", label_hero=True, libs=None, results_dir=RESULTS):
+    libs = libs or LIBS
+    n = len(libs)
     names = [d["name"].replace("\n", " ") for d in results]
     fig, ax = plt.subplots(figsize=(9.0, 5.0))
     x = np.arange(len(names))
-    w = 0.19
-    for i, lib in enumerate(LIBS):
+    w = 0.8 / n
+    for i, lib in enumerate(libs):
         vals = [d["by"].get(lib, {}).get(key, np.nan) for d in results]
-        ax.bar(x + (i - 1.5) * w, vals, w, color=style.color(lib), label=SHORT[lib],
-               zorder=3, edgecolor="white", linewidth=0.6)
+        ax.bar(x + (i - (n - 1) / 2) * w, vals, w, color=style.color(lib),
+               label=SHORT.get(lib, lib), zorder=3, edgecolor="white", linewidth=0.6)
     if label_hero:  # direct value labels on the rustwood (hero) bars
+        hero_off = (0 - (n - 1) / 2) * w  # rustwood is libs[0]
         for j, d in enumerate(results):
             v = d["by"].get("rustwood (B300)", {}).get(key, np.nan)
             if not np.isnan(v):
                 won = v == max((r[key] for r in d["by"].values()), default=v)
-                ax.annotate(fmt(v), (x[j] - 1.5 * w, v), textcoords="offset points",
+                ax.annotate(fmt(v), (x[j] + hero_off, v), textcoords="offset points",
                             xytext=(0, 5), ha="center", fontsize=8.6,
                             color=style.color("rustwood"),
                             fontweight="bold" if won else "semibold")
@@ -208,36 +198,46 @@ def grouped_bar(results, key, ylabel, main, sub, fname, fmt, logy=False, ylim=No
     ax.set_xlim(-0.55, len(names) - 0.45)
     ax.margins(y=0.12)
     if legend_loc == "below":
-        style.legend(ax, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.13))
+        style.legend(ax, ncol=min(n, 4), loc="upper center", bbox_to_anchor=(0.5, -0.13))
     else:
         style.legend(ax, ncol=2, loc=legend_loc)
-    fig.savefig(os.path.join(RESULTS, fname))
+    fig.savefig(os.path.join(results_dir, fname))
     plt.close(fig)
-    print("wrote", fname)
+    print("wrote", os.path.join(os.path.basename(results_dir), fname))
 
 
-def make_plots(results):
+def make_plots(results, libs=None, results_dir=RESULTS):
     grouped_bar(results, "auc", "test ROC-AUC",
-                "Accuracy on real tabular datasets",
+                "Test accuracy across datasets",
                 "depth 6, 200 trees · each library learning-rate-tuned on validation · test ROC-AUC",
-                "real_auc.png", fmt=lambda v: f"{v:.3f}", ylim=(0.70, 1.0), legend_loc="below")
+                "dataset_auc.png", fmt=lambda v: f"{v:.3f}", ylim=(0.70, 1.0), legend_loc="below",
+                libs=libs, results_dir=results_dir)
     grouped_bar(results, "train", "training wall-clock (s)",
-                "Training time on real datasets",
+                "Training time across datasets",
                 "depth 6, 200 trees · warm (cold-start excluded) · lower is better",
-                "real_train_time.png", fmt=lambda v: f"{v:.2f}s", logy=True,
-                legend_loc="upper left", label_hero=True)
+                "dataset_train_time.png", fmt=lambda v: f"{v:.2f}s", logy=True,
+                legend_loc="upper left", label_hero=True, libs=libs, results_dir=results_dir)
 
 
-def main():
-    style.apply()
-    os.makedirs(RESULTS, exist_ok=True)
-    if "--plot-only" in sys.argv:  # re-render figures from saved results
-        make_plots(json.load(open(os.path.join(RESULTS, "real_results.json"))))
-        return
-    if not os.path.exists(RUSTWOOD_BIN):
-        sys.exit(f"build rustwood first: {RUSTWOOD_BIN}")
+LOADERS = (load_titanic, load_creditg, load_bank, load_adult, load_covtype)
 
-    # Warm the GPU (pay CUDA/context cold-start once, before any timing).
+
+def default_runners(ds):
+    """Map series-name -> zero-arg runner for one prepared dataset `ds` (SimpleNamespace)."""
+    return {
+        "rustwood (B300)": lambda: run_rustwood(ds.tune_dir, ds.final_dir, ds.cat_idx),
+        "XGBoost-GPU": lambda: run_xgb(ds.Xcat.iloc[ds.i_ti], ds.y[ds.i_ti],
+                                       ds.Xcat.iloc[ds.i_va], ds.y[ds.i_va],
+                                       ds.Xcat.iloc[ds.i_tr], ds.y[ds.i_tr],
+                                       ds.Xcat.iloc[ds.i_te], ds.y[ds.i_te]),
+        "LightGBM-GPU": lambda: run_lgbm(ds.Xcat.iloc[ds.i_ti], ds.y[ds.i_ti],
+                                         ds.Xcat.iloc[ds.i_va], ds.y[ds.i_va],
+                                         ds.Xcat.iloc[ds.i_tr], ds.y[ds.i_tr],
+                                         ds.Xcat.iloc[ds.i_te], ds.y[ds.i_te]),
+    }
+
+
+def _warmup_gpu():
     try:
         import xgboost as xgb
         xgb.XGBClassifier(n_estimators=8, device="cuda", tree_method="hist").fit(
@@ -246,8 +246,19 @@ def main():
     except Exception as e:  # noqa: BLE001
         print("warmup skipped:", e)
 
+
+def benchmark(runners_for=default_runners, libs=None, results_dir=RESULTS,
+              json_name="results.json"):
+    """Run the per-dataset benchmark for the given runner set and render figures.
+
+    `runners_for(ds)` returns {series-name: zero-arg runner}; override it to add/swap
+    series. `libs` is the ordered series list for the table/plots.
+    """
+    libs = libs or LIBS
+    os.makedirs(results_dir, exist_ok=True)
+    _warmup_gpu()
     results = []
-    for loader in (load_titanic, load_creditg, load_bank, load_adult, load_covtype):
+    for loader in LOADERS:
         try:
             Xdf, y, name = loader()
             Xnum, Xcat, y, cat_idx = preprocess(Xdf, y)
@@ -259,29 +270,23 @@ def main():
         i_ti, i_va = train_test_split(i_tr, test_size=0.2, random_state=42, stratify=y[i_tr])
         print(f"\n{'='*70}\n{name}: train={len(i_tr):,} test={len(i_te):,} "
               f"feat={Xnum.shape[1]} cat={len(cat_idx)} pos={y.mean():.3f}\n{'='*70}")
-
         save_blobs(os.path.join(TMP, name, "tune"), Xnum[i_ti], y[i_ti], Xnum[i_va], y[i_va])
         save_blobs(os.path.join(TMP, name, "final"), Xnum[i_tr], y[i_tr], Xnum[i_te], y[i_te])
 
+        ds = SimpleNamespace(
+            name=name, Xnum=Xnum, Xcat=Xcat, y=y, cat_idx=cat_idx,
+            i_ti=i_ti, i_va=i_va, i_tr=i_tr, i_te=i_te,
+            tune_dir=os.path.join(TMP, name, "tune"), final_dir=os.path.join(TMP, name, "final"))
+
         by = {}
-        runners = {
-            "rustwood (B300)": lambda: run_rustwood(os.path.join(TMP, name, "tune"),
-                                                    os.path.join(TMP, name, "final"), cat_idx),
-            "XGBoost-GPU": lambda: run_xgb(Xcat.iloc[i_ti], y[i_ti], Xcat.iloc[i_va], y[i_va],
-                                           Xcat.iloc[i_tr], y[i_tr], Xcat.iloc[i_te], y[i_te]),
-            "LightGBM-GPU": lambda: run_lgbm(Xcat.iloc[i_ti], y[i_ti], Xcat.iloc[i_va], y[i_va],
-                                             Xcat.iloc[i_tr], y[i_tr], Xcat.iloc[i_te], y[i_te]),
-            "baseline (CPU)": lambda: run_baseline(Xnum[i_ti], y[i_ti], Xnum[i_va], y[i_va],
-                                               Xnum[i_tr], y[i_tr], Xnum[i_te], y[i_te]),
-        }
-        for lib, fn in runners.items():
+        for lib, fn in runners_for(ds).items():
             try:
                 by[lib] = fn()
             except Exception as e:  # noqa: BLE001
                 print(f"  [skip {lib}] {type(e).__name__}: {str(e)[:80]}")
         best = max((r["auc"] for r in by.values()), default=0)
         print(f"  {'model':<16}{'AUC':>8}{'lr':>6}{'train_s':>10}{'pred_ms':>10}")
-        for lib in LIBS:
+        for lib in libs:
             if lib in by:
                 r = by[lib]
                 star = " *" if r["auc"] == best else ""
@@ -289,8 +294,20 @@ def main():
         results.append({"name": name.replace("-581k", "\n581k"), "by": by})
 
     out = [{"name": r["name"].replace("\n", " "), "by": r["by"]} for r in results]
-    json.dump(out, open(os.path.join(RESULTS, "real_results.json"), "w"), indent=2)
-    make_plots(out)
+    json.dump(out, open(os.path.join(results_dir, json_name), "w"), indent=2)
+    make_plots(out, libs=libs, results_dir=results_dir)
+    return out
+
+
+def main():
+    style.apply()
+    os.makedirs(RESULTS, exist_ok=True)
+    if "--plot-only" in sys.argv:  # re-render figures from saved results
+        make_plots(json.load(open(os.path.join(RESULTS, "results.json"))))
+        return
+    if not os.path.exists(RUSTWOOD_BIN):
+        sys.exit(f"build rustwood first: {RUSTWOOD_BIN}")
+    benchmark()
 
 
 if __name__ == "__main__":

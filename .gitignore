@@ -6,3 +6,7 @@ __pycache__/
 *.pyc
 /data
 Cargo.lock
+
+# internal-only benchmark variants — never published
+scripts/internal/
+results_internal/

@@ -18,7 +18,6 @@ PALETTE = {
     "rustwood-fast": "#F1A340",
     "xgboost": "#33506B",       # deep slate blue
     "lightgbm": "#5FA08C",      # muted teal
-    "baseline": "#B58DB6",        # muted mauve
 }
 INK = "#15202B"      # title / emphasis
 MUTED = "#5B6573"    # labels, ticks, subtitles
@@ -36,7 +35,6 @@ def color(name: str) -> str:
         ("rustwood", PALETTE["rustwood"]),
         ("xgb", PALETTE["xgboost"]),
         ("lightgbm", PALETTE["lightgbm"]),
-        ("baseline", PALETTE["baseline"]),
     ):
         if token in key:
             return c

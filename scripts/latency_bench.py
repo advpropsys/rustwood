@@ -34,7 +34,6 @@ COLORS = {
     "rustwood-CPU": "#9467bd",
     "XGBoost-GPU": "#0072B2",
     "LightGBM-CPU": "#009E73",
-    "baseline (CPU)": "#CC79A7",
 }
 
 
@@ -114,13 +113,6 @@ def main():
     lm.fit(Xtr, ytr)
     series["LightGBM-CPU"] = sweep(lambda xb: lm.predict(xb), Xte, BATCHES)
 
-    print("baseline ...", flush=True)
-    from baseline import BaselineRegressor
-    rm = BaselineRegressor(n_estimators=N_TREES, max_depth=MAX_DEPTH, learning_rate=LR,
-                         n_bins=MAX_BIN, l2=L2, backend="rust", random_state=42)
-    rm.fit(Xtr, ytr)
-    series["baseline (CPU)"] = sweep(lambda xb: rm.predict(xb), Xte, BATCHES)
-
     # ---- per-row latency (ns/row) vs batch ----
     plt.figure(figsize=(8.4, 5.4))
     for name, res in series.items():
@@ -155,7 +147,7 @@ def main():
     plt.savefig(os.path.join(args.out, "infer_latency_percall.png"))
     plt.close()
 
-    print("\nbatch |        rustwood |       XGBoost |      LightGBM |        baseline   (ns/row)")
+    print("\nbatch |        rustwood |       XGBoost |      LightGBM   (ns/row)")
     for i, b in enumerate(BATCHES):
         row = [f"{b:6d}"]
         for name in COLORS:

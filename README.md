@@ -20,9 +20,8 @@ no CUDA C, no FFI shims. It targets **NVIDIA Blackwell** (built and benchmarked 
   5–30× faster than LightGBM-GPU at matched hyperparameters.
 - 🚀 **40–800× faster inference** — branchless oblivious scoring, **~0.6 ns/row** peak
   (≈1.7 **billion** rows/s), **289 ns** true single-row latency on the CPU path.
-- 🎯 **Competitive-to-winning accuracy on real data** (fair: warm timing, per-library
-  lr-tuning, native categoricals) — wins Titanic & Credit-G, ties Bank-Marketing & Adult;
-  behind only on big all-numeric
+- 🎯 **Competitive-to-winning accuracy** (fair: warm timing, per-library lr-tuning, native
+  categoricals) — wins Titanic & Credit-G, ties Bank-Marketing & Adult; behind only on big all-numeric
   problems (Covertype), the known oblivious-tree weak spot.
 - 🧩 **Fully async on one CUDA stream** — gradients, histograms, split selection, leaf
   values and the model all live on the GPU; the host syncs once at the end.
@@ -33,24 +32,24 @@ no CUDA C, no FFI shims. It targets **NVIDIA Blackwell** (built and benchmarked 
 
 ## Results
 
-### Real datasets — a *fair* fight (test AUC, depth 6 / 200 trees)
+### Tabular datasets — a *fair* fight (test AUC, depth 6 / 200 trees)
 
-Five real OpenML/sklearn datasets, benchmarked with strict fairness controls
-(`scripts/real_bench.py`): **warm timing** (cold-start paid once up front),
+Five OpenML/sklearn datasets, benchmarked with strict fairness controls
+(`scripts/dataset_bench.py`): **warm timing** (cold-start paid once up front),
 **per-library learning-rate tuning** on a held-out validation split, and **each library's
 native categorical handling** (XGBoost `enable_categorical`, LightGBM `category` dtype,
 rustwood out-of-fold target encoding). Missing values imputed identically.
 
-![real AUC](results/real_auc.png)
-![real train time](results/real_train_time.png)
+![accuracy across datasets](results/dataset_auc.png)
+![training time across datasets](results/dataset_train_time.png)
 
-| dataset | feat (cat) | **rustwood** | XGBoost-GPU | LightGBM-GPU | baseline | train (rustwood / XGB / LGBM) |
-|---------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Titanic** | 7 (2) | **0.9010 🏆** | 0.8828 | 0.8915 | 0.8984 | **0.16** / 0.30 / 0.75 s |
-| **Credit-G** | 20 (13) | **0.7930 🏆** | 0.7431 | 0.7435 | 0.7554 | **0.18** / 0.57 / 0.72 s |
-| Bank-Marketing | 16 (9) | 0.9322 | 0.9343 | 0.9346 | 0.9230 | **0.17** / 0.50 / 1.34 s |
-| Adult | 14 (8) | 0.9289 | 0.9299 | 0.9294 | 0.9164 | **0.17** / 0.57 / 1.21 s |
-| Covertype (581k) | 54 (0) | 0.9473 | **0.9731** | 0.9719 | 0.9269 | **0.39** / 0.42 / 1.82 s |
+| dataset | feat (cat) | **rustwood** | XGBoost-GPU | LightGBM-GPU | train (rustwood / XGB / LGBM) |
+|---------|:---:|:---:|:---:|:---:|:---:|
+| **Titanic** | 7 (2) | **0.9010 🏆** | 0.8828 | 0.8915 | **0.16** / 0.30 / 0.75 s |
+| **Credit-G** | 20 (13) | **0.7930 🏆** | 0.7431 | 0.7435 | **0.18** / 0.57 / 0.72 s |
+| Bank-Marketing | 16 (9) | 0.9322 | 0.9343 | 0.9346 | **0.17** / 0.50 / 1.34 s |
+| Adult | 14 (8) | 0.9289 | 0.9299 | 0.9294 | **0.17** / 0.57 / 1.21 s |
+| Covertype (581k) | 54 (0) | 0.9473 | **0.9731** | 0.9719 | **0.39** / 0.42 / 1.82 s |
 
 Even with every library fully tuned and using native categoricals, **rustwood wins on the
 categorical/small tabular sets (Titanic, Credit-G), ties on Bank-Marketing & Adult (within
@@ -62,7 +61,7 @@ position: competitive-to-winning on structured tabular data + always fastest to 
 
 > A finding from the tuning sweep: oblivious trees are *weak learners*, so the conventional
 > `lr=0.1` under-converges them — rustwood prefers higher learning rates (0.2–0.3) on large
-> clean datasets. `real_bench.py` tunes lr per library so the comparison is fair.
+> clean datasets. `dataset_bench.py` tunes lr per library so the comparison is fair.
 
 ### Synthetic scaling
 
@@ -71,7 +70,7 @@ position: competitive-to-winning on structured tabular data + always fastest to 
 
 Training is fastest at every size; **inference is 1–2 orders of magnitude faster** end to
 end. The iso-accuracy frontier shows rustwood reaching XGBoost-class accuracy in comparable
-time and dominating LightGBM/baseline on the accuracy-vs-time plane:
+time and dominating LightGBM on the accuracy-vs-time plane:
 
 ![iso accuracy](results/iso_accuracy_1M.png)
 
@@ -126,11 +125,11 @@ python scripts/gen_data.py --out /tmp/d --n 1000000
 ./target/release/rustwood --data /tmp/d --objective l2 --trees 300 --depth 6 --lr 0.1
 ```
 
-Benchmark harnesses (need `xgboost`, `lightgbm`, optionally `baseline`):
+Benchmark harnesses (need `xgboost`, `lightgbm`):
 
 ```bash
-python scripts/bench.py        # synthetic scaling vs XGBoost/LightGBM/baseline
-python scripts/real_bench.py   # real datasets (Titanic, Adult, Bank, Credit-G, Covertype)
+python scripts/bench.py          # synthetic scaling vs XGBoost / LightGBM
+python scripts/dataset_bench.py  # named datasets (Titanic, Adult, Bank, Credit-G, Covertype)
 python scripts/latency_bench.py --rustwood-bin target/release/rustwood   # latency sweep
 python scripts/viz.py ...       # plots + flamegraphs
 ```
@@ -178,8 +177,8 @@ rustwood/
 
 Built entirely on **NVlabs cuda-oxide** (Rust → PTX). The half-precision atomic it needed
 for an experiment (`DeviceAtomicF16` → `atom.add.noftz.f16`) was contributed upstream.
-Benchmarked against XGBoost, LightGBM (Apache-2.0 / MIT) and **baseline**; rustwood's feature
-set draws on published techniques from those libraries and CatBoost / PGBM papers.
+Benchmarked against XGBoost and LightGBM (Apache-2.0 / MIT); rustwood's feature set draws
+on published techniques from those libraries and CatBoost / PGBM papers.
 
 **Honest limitations:** oblivious trees are less expressive per tree than asymmetric
 leaf-wise trees, so on large all-numeric problems rustwood trails XGBoost/LightGBM on

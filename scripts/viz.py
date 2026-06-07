@@ -44,7 +44,7 @@ PHASE = {
     "update_pred": "leaf_reduce",
 }
 COLORS = {n: style.color(n) for n in
-          ["rustwood (B300)", "XGBoost-GPU", "LightGBM-gpu", "baseline (CPU)"]}
+          ["rustwood (B300)", "XGBoost-GPU", "LightGBM-gpu"]}
 FLAMEGRAPH_PL = "flamegraph.pl"
 
 
@@ -180,7 +180,7 @@ def plot_infer(results, out_png):
 def plot_speedup(results, out_png):
     data = synthetic_rows(results)
     sizes = list(data.keys())
-    others = ["XGBoost-GPU", "LightGBM-gpu", "baseline (CPU)"]
+    others = ["XGBoost-GPU", "LightGBM-gpu"]
     import numpy as np
     x = np.arange(len(sizes))
     w = 0.25
@@ -244,7 +244,7 @@ def plot_iso_accuracy(results, rustwood_bin, data_dir, out_png):
         plt.plot(xs, ys, "o-", color=COLORS["rustwood (B300)"], label="rustwood (depth/trees sweep)", lw=2.2, ms=8)
         for x, y, t in pts:
             plt.annotate(t, (x, y), textcoords="offset points", xytext=(5, -10), fontsize=8)
-    for lib in ("XGBoost-GPU", "LightGBM-gpu", "baseline (CPU)"):
+    for lib in ("XGBoost-GPU", "LightGBM-gpu"):
         if lib in one_m:
             plt.scatter([one_m[lib]["train_time"]], [one_m[lib]["r2"]],
                         color=COLORS[lib], s=130, marker="*", zorder=5, label=lib)

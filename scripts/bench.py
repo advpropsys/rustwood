@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Benchmark rustwood (GPU oblivious-tree GBDT on B300) vs XGBoost-GPU and
-LightGBM-GPU, using baseline's benchmark methodology.
+LightGBM-GPU on synthetic scaling regression.
 
-- Datasets: California Housing (real) + baseline's scaling synthetic regression
+- Datasets: California Housing + a scaling synthetic regression
   (20 numeric + 5 categorical features, 10 informative, nonlinear interaction).
 - Hyperparameters (identical for every library): 100 trees, depth 6, lr 0.1,
   L2=1.0, max_bin 256.
@@ -39,7 +39,7 @@ MAX_BIN = 256
 # --------------------------------------------------------------------------- data
 def gen_synthetic(n_total, seed=42, n_numeric=20, n_categorical=5, n_informative=10,
                   noise_std=0.5):
-    """Port of baseline benchmarks/baseline_vs_catboost_FIXED.py:generate_regression_data."""
+    """Synthetic regression: numeric + categorical features with nonlinear interactions."""
     rng = np.random.RandomState(seed)
     X_numeric = rng.randn(n_total, n_numeric)
     X_categorical = np.zeros((n_total, n_categorical), dtype=int)
@@ -116,18 +116,6 @@ def run_xgb(Xtr, ytr, Xte, yte):
             "rmse": rmse, "mae": mae, "r2": r2, "wall": train}
 
 
-def run_baseline(Xtr, ytr, Xte, yte):
-    """baseline with its Rust-accelerated CPU backend (the reference oblivious-tree lib)."""
-    from baseline import BaselineRegressor
-    m = BaselineRegressor(n_estimators=N_TREES, max_depth=MAX_DEPTH, learning_rate=LR,
-                        n_bins=MAX_BIN, l2=L2, backend="rust", random_state=42)
-    t0 = time.perf_counter(); m.fit(Xtr, ytr); train = time.perf_counter() - t0
-    t0 = time.perf_counter(); pred = m.predict(Xte); pt = time.perf_counter() - t0
-    rmse, mae, r2 = metrics(yte, np.asarray(pred).ravel())
-    return {"name": "baseline (CPU)", "train_time": train, "pred_time": pt,
-            "rmse": rmse, "mae": mae, "r2": r2, "wall": train}
-
-
 def run_lgbm(Xtr, ytr, Xte, yte):
     import lightgbm as lgb
     last = None
@@ -171,8 +159,7 @@ def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost):
 
     runners = [("rustwood", lambda: run_rustwood(data_dir, gpu)),
                ("xgboost", lambda: run_xgb(Xtr, ytr, Xte, yte)),
-               ("lightgbm", lambda: run_lgbm(Xtr, ytr, Xte, yte)),
-               ("baseline", lambda: run_baseline(Xtr, ytr, Xte, yte))]
+               ("lightgbm", lambda: run_lgbm(Xtr, ytr, Xte, yte))]
     if want_catboost:
         runners.append(("catboost", lambda: run_catboost(Xtr, ytr, Xte, yte)))
 
