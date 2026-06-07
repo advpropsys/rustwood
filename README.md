@@ -25,6 +25,12 @@ no CUDA C, no FFI shims. It targets **NVIDIA Blackwell** (built and benchmarked 
   problems (Covertype), the known oblivious-tree weak spot.
 - 🧩 **Fully async on one CUDA stream** — gradients, histograms, split selection, leaf
   values and the model all live on the GPU; the host syncs once at the end.
+- 🪶 **Tiny: ~3.2k lines of Rust** — vs XGBoost's 86.7k and LightGBM's 63k C++/CUDA
+  (~20–27× smaller). GPU + CPU in one codebase; pure-Rust kernels, no separate CUDA-C++.
+- 💾 **Instant model I/O** — the `.rwood` binary saves in **0.17 ms** and loads in
+  **0.044 ms** (500 trees), **88–1600× faster** and 16–24× smaller than XGBoost/LightGBM.
+- 🖥️ **GPU-free `--device cpu`** — a rayon CPU trainer, bit-identical to the GPU, and the
+  fastest CPU oblivious-tree trainer measured.
 - 🔬 Rich feature set: target encoding, monotonic constraints, GOSS, feature importance,
   PGBM prediction intervals, 4-bit bin packing, f16/int atomic histograms, and more.
 
