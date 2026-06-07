@@ -180,7 +180,7 @@ def plot_infer(results, out_png):
 def plot_speedup(results, out_png):
     data = synthetic_rows(results)
     sizes = list(data.keys())
-    others = ["XGBoost-GPU", "LightGBM-gpu"]
+    others = [l for l in COLORS if "rustwood" not in l.lower()]
     import numpy as np
     x = np.arange(len(sizes))
     w = 0.25

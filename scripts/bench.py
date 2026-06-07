@@ -99,9 +99,12 @@ def run_rustwood(data_dir, gpu=0):
         raise RuntimeError("rustwood failed")
     line = next(l for l in out.stdout.splitlines() if l.startswith("RESULT"))
     kv = dict(tok.split("=") for tok in line.split()[1:])
+    cpu_ms = next((float(l.split("CPU_PRED_MS=")[1].split()[0])
+                   for l in out.stdout.splitlines() if "CPU_PRED_MS=" in l), float("nan"))
     return {"name": "rustwood (B300)", "train_time": float(kv["train_s"]),
-            "pred_time": float(kv["pred_ms"]) / 1e3, "rmse": float(kv["rmse"]),
-            "mae": float(kv["mae"]), "r2": float(kv["r2"]), "wall": wall}
+            "pred_time": float(kv["pred_ms"]) / 1e3, "pred_cpu_time": cpu_ms / 1e3,
+            "rmse": float(kv["rmse"]), "mae": float(kv["mae"]), "r2": float(kv["r2"]),
+            "wall": wall}
 
 
 def run_xgb(Xtr, ytr, Xte, yte):
@@ -149,7 +152,8 @@ def run_catboost(Xtr, ytr, Xte, yte):
 
 
 # --------------------------------------------------------------------------- main
-def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost):
+def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost, extra=None):
+    """`extra(Xtr, ytr, Xte, yte)` may return a list of (key, runner) appended to the set."""
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=seed)
     data_dir = os.path.join(data_root, name.replace(" ", "_"))
     save_blobs(data_dir, Xtr, ytr, Xte, yte)
@@ -162,6 +166,8 @@ def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost):
                ("lightgbm", lambda: run_lgbm(Xtr, ytr, Xte, yte))]
     if want_catboost:
         runners.append(("catboost", lambda: run_catboost(Xtr, ytr, Xte, yte)))
+    if extra:
+        runners += extra(Xtr, ytr, Xte, yte)
 
     rows = []
     for key, fn in runners:
@@ -171,13 +177,16 @@ def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost):
             print(f"  [skip {key}] {e}")
 
     n_test = len(Xte)
-    hdr = f"{'model':<16}{'train_s':>10}{'ms/tree':>10}{'pred_ms':>10}{'us/row':>9}{'RMSE':>11}{'R2':>9}"
+    hdr = (f"{'model':<16}{'train_s':>10}{'ms/tree':>10}{'predGPU_us/row':>15}"
+           f"{'predCPU_us/row':>15}{'RMSE':>11}{'R2':>9}")
     print(hdr); print("-" * len(hdr))
     base = next((r for r in rows if r["name"].startswith("rustwood")), None)
     for r in rows:
+        cpu = r.get("pred_cpu_time")
+        cpu_s = f"{cpu / n_test * 1e6:>15.3f}" if cpu and cpu == cpu else f"{'-':>15}"
         print(f"{r['name']:<16}{r['train_time']:>10.3f}"
               f"{r['train_time'] / N_TREES * 1e3:>10.2f}"
-              f"{r['pred_time'] * 1e3:>10.2f}{r['pred_time'] / n_test * 1e6:>9.3f}"
+              f"{r['pred_time'] / n_test * 1e6:>15.3f}{cpu_s}"
               f"{r['rmse']:>11.4f}{r['r2']:>9.4f}")
     if base:
         print("speedup vs rustwood (train):", ", ".join(
@@ -185,6 +194,30 @@ def bench_dataset(name, X, y, test_size, seed, gpu, data_root, want_catboost):
             for r in rows if r is not base))
     return {"dataset": name, "n_train": len(Xtr), "n_test": n_test,
             "n_features": int(X.shape[1]), "results": rows}
+
+
+def run(sizes, seed=42, gpu=0, data_root="/tmp/rustwood_bench", catboost=False,
+        json_out="", extra=None):
+    if not os.path.exists(RUSTWOOD_BIN):
+        sys.exit(f"rustwood binary not found at {RUSTWOOD_BIN}; build it first")
+    all_results = []
+    for tok in sizes:
+        tok = str(tok).strip()
+        if tok == "california":
+            X, y = load_california()
+            all_results.append(bench_dataset("California Housing", X, y, 0.2,
+                                             seed, gpu, data_root, catboost, extra))
+        else:
+            n_train = int(tok)
+            n_test = max(2000, n_train // 5)
+            X, y = gen_synthetic(n_train + n_test, seed=seed)
+            all_results.append(bench_dataset(f"Synthetic {n_train // 1000}K", X, y,
+                                             n_test, seed, gpu, data_root, catboost, extra))
+    if json_out:
+        with open(json_out, "w") as fh:
+            json.dump(all_results, fh, indent=2)
+        print("\nwrote", json_out)
+    return all_results
 
 
 def main():
@@ -197,30 +230,8 @@ def main():
     ap.add_argument("--catboost", action="store_true")
     ap.add_argument("--json-out", default="")
     args = ap.parse_args()
-
-    if not os.path.exists(RUSTWOOD_BIN):
-        sys.exit(f"rustwood binary not found at {RUSTWOOD_BIN}; build it first")
-
-    all_results = []
-    for tok in args.sizes.split(","):
-        tok = tok.strip()
-        if tok == "california":
-            X, y = load_california()
-            all_results.append(bench_dataset("California Housing", X, y, 0.2,
-                                             args.seed, args.gpu, args.data_root,
-                                             args.catboost))
-        else:
-            n_train = int(tok)
-            n_test = max(2000, n_train // 5)
-            X, y = gen_synthetic(n_train + n_test, seed=args.seed)
-            all_results.append(bench_dataset(f"Synthetic {n_train // 1000}K", X, y,
-                                             n_test, args.seed, args.gpu,
-                                             args.data_root, args.catboost))
-
-    if args.json_out:
-        with open(args.json_out, "w") as fh:
-            json.dump(all_results, fh, indent=2)
-        print("\nwrote", args.json_out)
+    run([t.strip() for t in args.sizes.split(",")], args.seed, args.gpu,
+        args.data_root, args.catboost, args.json_out)
 
 
 if __name__ == "__main__":

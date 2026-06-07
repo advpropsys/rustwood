@@ -116,13 +116,16 @@ def rustwood_auc(data_dir, lr, cat_idx):
     if not line:
         print(out.stdout[-600:], out.stderr[-400:]); raise RuntimeError("rustwood failed")
     kv = dict(t.split("=") for t in line.split()[1:])
-    return float(kv["auc"]), float(kv["train_s"]), float(kv["pred_ms"]) / 1e3
+    cpu_ms = next((float(l.split("CPU_PRED_MS=")[1].split()[0])
+                   for l in out.stdout.splitlines() if "CPU_PRED_MS=" in l), float("nan"))
+    return float(kv["auc"]), float(kv["train_s"]), float(kv["pred_ms"]) / 1e3, cpu_ms / 1e3
 
 
 def run_rustwood(tune_dir, final_dir, cat_idx):
     best_lr = max(LRS, key=lambda lr: rustwood_auc(tune_dir, lr, cat_idx)[0])
-    auc, tr, pred = rustwood_auc(final_dir, best_lr, cat_idx)
-    return {"auc": auc, "train": tr, "pred": pred, "lr": best_lr}
+    auc, tr, pred, pred_cpu = rustwood_auc(final_dir, best_lr, cat_idx)
+    # GPU is the default predict path; pred_cpu is the host single-thread oblivious scorer.
+    return {"auc": auc, "train": tr, "pred": pred, "pred_cpu": pred_cpu, "lr": best_lr}
 
 
 def run_xgb(Xi, yi, Xv, yv, Xf, yf, Xte, yte):
@@ -285,12 +288,15 @@ def benchmark(runners_for=default_runners, libs=None, results_dir=RESULTS,
             except Exception as e:  # noqa: BLE001
                 print(f"  [skip {lib}] {type(e).__name__}: {str(e)[:80]}")
         best = max((r["auc"] for r in by.values()), default=0)
-        print(f"  {'model':<16}{'AUC':>8}{'lr':>6}{'train_s':>10}{'pred_ms':>10}")
+        print(f"  {'model':<16}{'AUC':>8}{'lr':>6}{'train_s':>10}{'predGPU_ms':>11}{'predCPU_ms':>11}")
         for lib in libs:
             if lib in by:
                 r = by[lib]
                 star = " *" if r["auc"] == best else ""
-                print(f"  {lib:<16}{r['auc']:>8.4f}{r['lr']:>6}{r['train']:>10.3f}{r['pred']*1e3:>10.2f}{star}")
+                cpu = r.get("pred_cpu")
+                cpu_s = f"{cpu*1e3:>11.2f}" if cpu and cpu == cpu else f"{'-':>11}"
+                print(f"  {lib:<16}{r['auc']:>8.4f}{r['lr']:>6}{r['train']:>10.3f}"
+                      f"{r['pred']*1e3:>11.2f}{cpu_s}{star}")
         results.append({"name": name.replace("-581k", "\n581k"), "by": by})
 
     out = [{"name": r["name"].replace("\n", " "), "by": r["by"]} for r in results]

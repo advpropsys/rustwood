@@ -148,6 +148,17 @@ fn main() {
 
     let (scores, infer_time) = booster.predict(&ds.x_test, ds.n_test).expect("prediction failed");
 
+    // CPU inference path: time the host oblivious traversal over the full test set and
+    // verify it matches the GPU kernel bit-for-bit (same forest, same f32 accumulation).
+    {
+        let mut cpu = vec![0.0f32; ds.n_test];
+        let t0 = std::time::Instant::now();
+        booster.predict_cpu(&ds.x_test, ds.n_test, &mut cpu);
+        let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
+        let maxdiff = scores.iter().zip(&cpu).map(|(g, c)| (g - c).abs()).fold(0.0f32, f32::max);
+        println!("CPU_PRED_MS={cpu_ms:.4} CPU_GPU_MAXDIFF={maxdiff:.3e}");
+    }
+
     // Persist raw per-row test predictions for external callers.
     // For SquaredError these are the regression outputs; for Logistic they are raw margins
     // (apply the logistic link downstream to obtain probabilities).
