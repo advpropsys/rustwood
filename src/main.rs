@@ -1,0 +1,221 @@
+//! `rustwood` — histogram-based oblivious-tree gradient boosting on NVIDIA B300
+//! (sm_103), with every GPU kernel written in pure Rust and compiled to PTX by
+//! NVlabs `cuda-oxide`.
+//!
+//! Run (from the cuda-oxide repo root):
+//!   cargo oxide run rustwood --arch sm_103 --release -- \
+//!       --data crates/rustc-codegen-cuda/examples/rustwood/data \
+//!       --trees 500 --depth 6 --lr 0.1 --bins 256 --objective logistic
+
+#![feature(f16)]
+
+mod booster;
+mod config;
+mod data;
+mod encoding;
+mod gpu_kernels;
+mod metrics;
+
+use booster::Booster;
+use config::{Config, Objective};
+use data::Dataset;
+
+/// Validate that shared-memory BlockAtomicF32 works (lowers to `atom.shared`).
+fn smem_spike_test() {
+    use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
+    let ctx = CudaContext::new(0).expect("ctx");
+    let stream = ctx.default_stream();
+    let module = gpu_kernels::kernels::load(&ctx).expect("load");
+    let nbins = 16u32;
+    let n = 256usize;
+    // Deterministic bins; expected count per bin = n/nbins.
+    let bins: Vec<u32> = (0..n).map(|i| (i as u32) % nbins).collect();
+    let bins_dev = DeviceBuffer::from_host(&stream, &bins).expect("bins");
+    let out_dev = DeviceBuffer::<f32>::zeroed(&stream, nbins as usize).expect("out");
+    let cfg = LaunchConfig { grid_dim: (1, 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 };
+    module.smem_spike(&stream, cfg, &bins_dev, &out_dev, n as u32, nbins).expect("launch");
+    let got = out_dev.to_host_vec(&stream).expect("copy");
+    let expected = (n as f32) / (nbins as f32);
+    let ok = got.iter().all(|&c| (c - expected).abs() < 0.5);
+    println!("smem_spike: counts={got:?} expected={expected}");
+    println!("shared-memory atomics: {}", if ok { "WORK ✓" } else { "BROKEN ✗" });
+}
+
+fn main() {
+    if std::env::args().any(|a| a == "--smem-test") {
+        smem_spike_test();
+        return;
+    }
+    let cfg = Config::from_args();
+
+    let ds = Dataset::load(&cfg.data_dir);
+    println!("=== rustwood: GPU oblivious-tree GBDT (cuda-oxide / sm_103 / B300) ===");
+    println!(
+        "data: train={} test={} features={}",
+        ds.n_train, ds.n_test, ds.n_features
+    );
+    println!(
+        "params: trees={} depth={} lr={} bins={} lambda={} objective={:?}",
+        cfg.n_trees, cfg.depth, cfg.learning_rate, cfg.n_bins, cfg.lambda, cfg.objective
+    );
+
+    let objective = cfg.objective;
+    let profile_out = cfg.profile_out.clone();
+    let pgbm = cfg.pgbm;
+    let latency_bench = cfg.latency_bench;
+    let throughput_bench = cfg.throughput_bench;
+    let mut booster = Booster::new(cfg).expect("init CUDA context / load PTX module");
+
+    let train_time = if profile_out.is_empty() {
+        booster.fit(&ds).expect("training failed")
+    } else {
+        let prof = booster.fit_profiled(&ds).expect("profiled training failed");
+        let mut body = String::from("{\n  \"total_ns\": ");
+        body.push_str(&prof.total.as_nanos().to_string());
+        body.push_str(",\n  \"categories\": {\n");
+        for (i, (name, ns)) in prof.per_category_ns.iter().enumerate() {
+            let comma = if i + 1 < prof.per_category_ns.len() { "," } else { "" };
+            body.push_str(&format!("    \"{name}\": {ns}{comma}\n"));
+        }
+        body.push_str("  }\n}\n");
+        std::fs::write(&profile_out, body).expect("write profile");
+        println!("wrote kernel profile -> {profile_out}");
+        prof.total
+    };
+    if latency_bench {
+        let batches = [1usize, 8, 64, 512, 4096, 32768, 262144];
+        let res = booster
+            .bench_latency(&ds.x_test, ds.n_test, &batches, 300)
+            .expect("latency bench failed");
+        println!("\n--- inference latency (GPU end-to-end, model resident) ---");
+        for (b, per_call_ns) in &res {
+            println!(
+                "LATENCY batch={b} per_call_ns={per_call_ns:.1} per_row_ns={:.3}",
+                per_call_ns / *b as f64
+            );
+        }
+
+        // EXPERIMENTAL fast GPU path: reused buffers + pinned host + spin-sync.
+        let fast = booster
+            .bench_latency_fast(&ds.x_test, ds.n_test, &batches, 300)
+            .expect("fast latency bench failed");
+        println!("\n--- inference latency (GPU fast path: reuse+pinned+spin-sync) ---");
+        for (b, per_call_ns) in &fast {
+            println!(
+                "LATENCY_FAST batch={b} per_call_ns={per_call_ns:.1} per_row_ns={:.3}",
+                per_call_ns / *b as f64
+            );
+        }
+
+        // CPU path: same batch sweep, host-side oblivious traversal.
+        println!("\n--- inference latency (CPU, host oblivious traversal) ---");
+        let mut scratch = vec![0.0f32; ds.n_test];
+        for &(b, _) in &res {
+            for _ in 0..5 {
+                booster.predict_cpu(&ds.x_test, b, &mut scratch);
+            }
+            let reps = if b <= 64 { 5000 } else { 200 };
+            let t0 = std::time::Instant::now();
+            for _ in 0..reps {
+                booster.predict_cpu(&ds.x_test, b, &mut scratch);
+            }
+            let per_call = t0.elapsed().as_nanos() as f64 / reps as f64;
+            println!(
+                "LATENCY_CPU batch={b} per_call_ns={per_call:.1} per_row_ns={:.3}",
+                per_call / b as f64
+            );
+        }
+    }
+
+    if throughput_bench {
+        let rows = [1_000_000usize, 10_000_000, 50_000_000, 100_000_000, 250_000_000,
+                    500_000_000, 1_000_000_000, 2_000_000_000];
+        let res = booster.bench_throughput(&rows, 10).expect("throughput bench failed");
+        println!("\n--- peak inference throughput (device-resident) ---");
+        for (n, ns_per_row, ok) in &res {
+            if *ok {
+                println!(
+                    "THRU rows={n} ns_per_row={ns_per_row:.4} rows_per_s={:.3e} input_GiB={:.2}",
+                    1e9 / ns_per_row,
+                    (*n as f64 * ds.n_features as f64 * 4.0) / (1u64 << 30) as f64
+                );
+            } else {
+                println!("THRU rows={n} ALLOCATION_FAILED (VRAM/index ceiling)");
+            }
+        }
+    }
+
+    let (scores, infer_time) = booster.predict(&ds.x_test, ds.n_test).expect("prediction failed");
+
+    let cfg = booster.config();
+    let train_s = train_time.as_secs_f64();
+    let cells = ds.n_train as f64 * cfg.n_trees as f64;
+    println!("\n--- timing ---");
+    println!("train (GPU)      : {train_s:.3} s");
+    println!("  throughput     : {:.2} M rows*trees / s", cells / train_s / 1e6);
+    println!("  per-tree        : {:.3} ms", train_s * 1e3 / cfg.n_trees as f64);
+    println!(
+        "inference        : {:.3} ms for {} rows ({:.1} M rows/s)",
+        infer_time.as_secs_f64() * 1e3,
+        ds.n_test,
+        ds.n_test as f64 / infer_time.as_secs_f64() / 1e6
+    );
+
+    println!("\n--- test metrics ---");
+    let pred_ms = infer_time.as_secs_f64() * 1e3;
+    let result_line = match objective {
+        Objective::Logistic => {
+            let auc = metrics::auc(&scores, &ds.y_test);
+            let ll = metrics::logloss(&scores, &ds.y_test);
+            let acc = metrics::accuracy(&scores, &ds.y_test);
+            println!("AUC      : {auc:.6}");
+            println!("logloss  : {ll:.6}");
+            println!("accuracy : {acc:.6}");
+            format!("RESULT objective=logistic train_s={train_s:.6} pred_ms={pred_ms:.6} auc={auc:.6} logloss={ll:.6} accuracy={acc:.6}")
+        }
+        Objective::SquaredError => {
+            let rmse = metrics::rmse(&scores, &ds.y_test);
+            let mae = metrics::mae(&scores, &ds.y_test);
+            let r2 = metrics::r2(&scores, &ds.y_test);
+            println!("RMSE     : {rmse:.6}");
+            println!("MAE      : {mae:.6}");
+            println!("R2       : {r2:.6}");
+            format!("RESULT objective=l2 train_s={train_s:.6} pred_ms={pred_ms:.6} rmse={rmse:.6} mae={mae:.6} r2={r2:.6}")
+        }
+    };
+    println!("\n{result_line}");
+
+    if pgbm {
+        let std = booster.predict_std(&ds.x_test, ds.n_test).expect("pgbm variance failed");
+        let mean_std = std.iter().map(|&s| s as f64).sum::<f64>() / std.len() as f64;
+        // Empirical coverage of the nominal 95% interval (pred +/- 1.96 sigma).
+        let mut covered = 0usize;
+        for ((&p, &y), &s) in scores.iter().zip(&ds.y_test).zip(&std) {
+            if (p - y).abs() <= 1.96 * s {
+                covered += 1;
+            }
+        }
+        println!("\n--- PGBM predictive intervals ---");
+        println!("mean sigma          : {mean_std:.4}");
+        println!("95% interval coverage: {:.1}% (nominal 95%)", 100.0 * covered as f64 / std.len() as f64);
+    }
+
+    let (fi_gain, fi_count) = booster.feature_importance();
+    if !fi_gain.is_empty() {
+        let total: f64 = fi_gain.iter().map(|&g| g as f64).sum();
+        let mut idx: Vec<usize> = (0..fi_gain.len()).collect();
+        idx.sort_by(|&a, &b| fi_gain[b].partial_cmp(&fi_gain[a]).unwrap());
+        println!("\n--- top features (by gain) ---");
+        for &f in idx.iter().take(8) {
+            if fi_gain[f] <= 0.0 {
+                break;
+            }
+            println!(
+                "  f{f:<3} gain={:>12.2} ({:>5.1}%)  splits={}",
+                fi_gain[f],
+                100.0 * fi_gain[f] as f64 / total.max(1e-9),
+                fi_count[f] as u64
+            );
+        }
+    }
+}
