@@ -131,7 +131,16 @@ pub fn train(
     let lr = cfg.learning_rate as f64;
     let min_child = cfg.min_child_h as f64;
     let n_trees = cfg.n_trees;
-    let nt = (std::thread::available_parallelism().map(|x| x.get()).unwrap_or(8) / 2).clamp(8, 32);
+    let avail = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(4);
+    // Use every core on small machines; on big ones use half (the histogram build is
+    // bandwidth-bound) capped at 32. The old `clamp(8, 32)` forced 8 threads even on a
+    // 2-core box -> 4x oversubscription and a big slowdown. Override via RUSTWOOD_THREADS.
+    let nt = std::env::var("RUSTWOOD_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&t| t > 0)
+        .unwrap_or_else(|| if avail <= 16 { avail } else { (avail / 2).min(32) })
+        .max(1);
 
     let pool = rayon::ThreadPoolBuilder::new().num_threads(nt).build().expect("rayon pool");
     pool.install(|| {
