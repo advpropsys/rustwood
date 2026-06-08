@@ -27,6 +27,9 @@ fn build_hist(
             let lo = ti * chunk;
             let hi = ((ti + 1) * chunk).min(m);
             let mut loc = vec![0f32; hsz * 2];
+            if lo >= hi {
+                return loc;
+            }
             for &ru in &rows[lo..hi] {
                 let r = ru as usize;
                 let nv = node[r];
@@ -280,6 +283,9 @@ pub fn train(
                     let hi = ((ti + 1) * lchunk).min(m);
                     let mut lg = vec![0f64; leaves];
                     let mut lc = vec![0f64; leaves];
+                    if lo >= hi {
+                        return (lg, lc);
+                    }
                     for &ru in &samp[lo..hi] {
                         let r = ru as usize;
                         let l = node[r] as usize;
