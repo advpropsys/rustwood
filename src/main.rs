@@ -16,6 +16,7 @@ mod cpu;
 mod config;
 mod data;
 mod encoding;
+#[cfg(feature = "gpu")]
 mod gpu_kernels;
 mod metrics;
 
@@ -24,6 +25,7 @@ use config::{Config, Device, Objective};
 use data::Dataset;
 
 /// Validate that shared-memory BlockAtomicF32 works (lowers to `atom.shared`).
+#[cfg(feature = "gpu")]
 fn smem_spike_test() {
     use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
     let ctx = CudaContext::new(0).expect("ctx");
@@ -44,19 +46,38 @@ fn smem_spike_test() {
     println!("shared-memory atomics: {}", if ok { "WORK ✓" } else { "BROKEN ✗" });
 }
 
+#[cfg(not(feature = "gpu"))]
+fn smem_spike_test() {
+    eprintln!("--smem-test requires a binary built with the 'gpu' feature");
+    std::process::exit(2);
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--smem-test") {
         smem_spike_test();
         return;
     }
+    #[cfg(feature = "gpu")]
     let cfg = Config::from_args();
+    #[cfg(not(feature = "gpu"))]
+    let mut cfg = Config::from_args();
+    #[cfg(not(feature = "gpu"))]
+    if !cfg.load_model.is_empty() {
+        cfg.device = Device::Cpu;
+    }
     if cfg.serve {
         serve(cfg.gpu);
         return;
     }
 
+    #[cfg(not(feature = "gpu"))]
+    if cfg.device == Device::Gpu && cfg.load_model.is_empty() {
+        eprintln!("this binary was built without the 'gpu' feature; use --device cpu");
+        std::process::exit(2);
+    }
+
     let ds = Dataset::load(&cfg.data_dir);
-    println!("=== rustwood: GPU oblivious-tree GBDT (cuda-oxide / sm_103 / B300) ===");
+    println!("=== rustwood: oblivious-tree GBDT ({:?}) ===", cfg.device);
     println!(
         "data: train={} test={} features={}",
         ds.n_train, ds.n_test, ds.n_features
@@ -69,9 +90,15 @@ fn main() {
     let objective = cfg.objective;
     let profile_out = cfg.profile_out.clone();
     let dump_pred = cfg.dump_pred.clone();
+    #[cfg(feature = "gpu")]
     let pgbm = cfg.pgbm && cfg.device == Device::Gpu;
     let latency_bench = cfg.latency_bench && cfg.device == Device::Gpu;
     let throughput_bench = cfg.throughput_bench && cfg.device == Device::Gpu;
+    #[cfg(not(feature = "gpu"))]
+    if latency_bench || throughput_bench || cfg.pgbm {
+        eprintln!("GPU-only options require a binary built with the 'gpu' feature");
+        std::process::exit(2);
+    }
     let device = cfg.device;
     let save_model = cfg.save_model.clone();
 
@@ -132,6 +159,7 @@ fn main() {
         println!("saved model -> {save_model} ({sz} bytes, {:.3} ms)", t.elapsed().as_secs_f64() * 1e3);
     }
 
+    #[cfg(feature = "gpu")]
     if latency_bench {
         let batches = [1usize, 8, 64, 512, 4096, 32768, 262144];
         let res = booster
@@ -177,6 +205,7 @@ fn main() {
         }
     }
 
+    #[cfg(feature = "gpu")]
     if throughput_bench {
         let rows = [1_000_000usize, 10_000_000, 50_000_000, 100_000_000, 250_000_000,
                     500_000_000, 1_000_000_000, 2_000_000_000];
@@ -201,7 +230,14 @@ fn main() {
         booster.predict_cpu(&ds.x_test, ds.n_test, &mut s);
         (s, t0.elapsed())
     } else {
-        booster.predict(&ds.x_test, ds.n_test).expect("prediction failed")
+        #[cfg(feature = "gpu")]
+        {
+            booster.predict(&ds.x_test, ds.n_test).expect("prediction failed")
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            unreachable!("GPU prediction is unavailable without the 'gpu' feature")
+        }
     };
 
     // GPU runs: time the host oblivious traversal and verify it matches the GPU kernel
@@ -231,7 +267,7 @@ fn main() {
     let train_s = train_time.as_secs_f64();
     let cells = ds.n_train as f64 * cfg.n_trees as f64;
     println!("\n--- timing ---");
-    println!("train (GPU)      : {train_s:.3} s");
+    println!("train ({device:?})      : {train_s:.3} s");
     println!("  throughput     : {:.2} M rows*trees / s", cells / train_s / 1e6);
     println!("  per-tree        : {:.3} ms", train_s * 1e3 / cfg.n_trees as f64);
     println!(
@@ -265,6 +301,7 @@ fn main() {
     };
     println!("\n{result_line}");
 
+    #[cfg(feature = "gpu")]
     if pgbm {
         let std = booster.predict_std(&ds.x_test, ds.n_test).expect("pgbm variance failed");
         let mean_std = std.iter().map(|&s| s as f64).sum::<f64>() / std.len() as f64;
@@ -303,6 +340,7 @@ fn main() {
 /// Persistent worker: read tab-separated arg lines from stdin, run each as a fit or a
 /// load+predict reusing one resident CUDA context, and reply with a status line + `__END__`.
 /// Lets a client pay the ~400 ms CUDA init once instead of per call.
+#[cfg(feature = "gpu")]
 fn serve(gpu: usize) {
     use std::io::{BufRead, Write};
     let mut ctx: Option<std::sync::Arc<cuda_core::CudaContext>> = None;
@@ -327,6 +365,7 @@ fn serve(gpu: usize) {
     }
 }
 
+#[cfg(feature = "gpu")]
 fn serve_handle(
     tokens: Vec<String>, gpu: usize, ctx: &mut Option<std::sync::Arc<cuda_core::CudaContext>>,
 ) -> String {
@@ -363,6 +402,73 @@ fn serve_handle(
             }
         }
         Booster::with_ctx(cfg.clone(), ctx.clone().unwrap())
+    };
+    let t = match booster.fit(&ds) {
+        Ok(t) => t,
+        Err(e) => return format!("ERROR fit {e}"),
+    };
+    if !cfg.save_model.is_empty() {
+        if let Err(e) = booster.save_model(&cfg.save_model) {
+            return format!("ERROR save {e}");
+        }
+    }
+    format!("OK train_s={:.6}", t.as_secs_f64())
+}
+
+#[cfg(not(feature = "gpu"))]
+fn serve(_gpu: usize) {
+    use std::io::{BufRead, Write};
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "QUIT" {
+            break;
+        }
+        let tokens: Vec<String> = line.split('\t').map(String::from).collect();
+        let resp = serve_handle_cpu(tokens);
+        let _ = writeln!(out, "{resp}\n__END__");
+        let _ = out.flush();
+    }
+}
+
+#[cfg(not(feature = "gpu"))]
+fn serve_handle_cpu(tokens: Vec<String>) -> String {
+    let mut cfg = Config::from_tokens(tokens);
+    if !cfg.load_model.is_empty() {
+        cfg.device = Device::Cpu;
+    }
+    if cfg.device == Device::Gpu {
+        return "ERROR this binary was built without the 'gpu' feature; use --device cpu".to_string();
+    }
+    let ds = Dataset::load(&cfg.data_dir);
+    if !cfg.load_model.is_empty() {
+        let booster = match Booster::load_model(&cfg.load_model) {
+            Ok(b) => b,
+            Err(e) => return format!("ERROR load {e}"),
+        };
+        let scores = booster.predict_host(&ds.x_test, ds.n_test);
+        if !cfg.dump_pred.is_empty() {
+            let mut bytes = Vec::with_capacity(scores.len() * 4);
+            for &s in &scores {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            if let Err(e) = std::fs::write(&cfg.dump_pred, &bytes) {
+                return format!("ERROR dump {e}");
+            }
+        }
+        return format!("OK n={}", scores.len());
+    }
+    let mut booster = match Booster::new(cfg.clone()) {
+        Ok(b) => b,
+        Err(e) => return format!("ERROR new {e}"),
     };
     let t = match booster.fit(&ds) {
         Ok(t) => t,

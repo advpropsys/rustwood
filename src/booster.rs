@@ -13,23 +13,32 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+#[cfg(feature = "gpu")]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "gpu")]
+use std::time::Instant;
 
+#[cfg(feature = "gpu")]
 use cuda_core::memory::{memcpy_dtoh_async, memcpy_htod_async};
-use cuda_core::{CudaContext, DeviceBuffer, DriverError, LaunchConfig, PinnedHostBuffer};
+#[cfg(feature = "gpu")]
+use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig, PinnedHostBuffer};
 
 use crate::config::{Config, Device, Objective};
 use crate::data::{Dataset, compute_boundaries};
+#[cfg(feature = "gpu")]
 use crate::gpu_kernels::kernels;
 
 type Err = Box<dyn std::error::Error>;
 
 // Fixed salts folded into the per-tree sampling RNG (decorrelate seeds from the tree index).
+#[cfg(feature = "gpu")]
 const SEED_SALT: u32 = 0x455A_4B41;
+#[cfg(feature = "gpu")]
 const GOSS_SALT: u32 = 0x5052_4F50;
 
 /// Kernel categories, in pipeline order — used for the profile breakdown / flamegraph.
+#[cfg(feature = "gpu")]
 pub const CATEGORIES: [&str; 9] = [
     "gradients",
     "zero_hist",
@@ -43,6 +52,7 @@ pub const CATEGORIES: [&str; 9] = [
 ];
 
 pub struct Booster {
+    #[cfg(feature = "gpu")]
     ctx: Option<Arc<CudaContext>>,
     cfg: Config,
     n_features: usize,
@@ -54,11 +64,13 @@ pub struct Booster {
     gmean: f32,
     fi_gain: Vec<f32>,
     fi_count: Vec<f32>,
+    #[allow(dead_code)]
     leafvar: Vec<f32>,
 }
 
 /// Inverse standard-normal CDF (Acklam's rational approximation). Used to turn the
 /// GOSS top-rate into a half-normal gradient threshold multiplier.
+#[cfg(feature = "gpu")]
 fn norm_ppf(p: f64) -> f64 {
     let a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
              1.383577518672690e2, -3.066479806614716e1, 2.506628277459239e0];
@@ -86,6 +98,7 @@ fn norm_ppf(p: f64) -> f64 {
 }
 
 /// Transpose row-major `x[i*nf+f]` into column-major `col[f*n+i]`.
+#[cfg(feature = "gpu")]
 fn column_major(x: &[f32], n: usize, nf: usize) -> Vec<f32> {
     let mut col = vec![0.0f32; n * nf];
     for i in 0..n {
@@ -97,11 +110,13 @@ fn column_major(x: &[f32], n: usize, nf: usize) -> Vec<f32> {
     col
 }
 
+#[cfg(feature = "gpu")]
 #[inline]
 fn elems(n: usize) -> LaunchConfig {
     LaunchConfig::for_num_elems(n as u32)
 }
 
+#[cfg(feature = "gpu")]
 #[inline]
 fn one_block_256() -> LaunchConfig {
     LaunchConfig { grid_dim: (1, 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 }
@@ -114,23 +129,33 @@ pub struct Profile {
 }
 
 impl Booster {
-    pub fn new(cfg: Config) -> Result<Self, DriverError> {
+    pub fn new(cfg: Config) -> Result<Self, Err> {
         // CPU device runs GPU-free: no CUDA context is created.
+        #[cfg(feature = "gpu")]
         let ctx = match cfg.device {
             Device::Cpu => None,
             Device::Gpu => Some(CudaContext::new(cfg.gpu)?),
         };
-        Ok(Self { ctx, cfg, n_features: 0, base_score: 0.0, feat: Vec::new(), thr: Vec::new(),
+        #[cfg(not(feature = "gpu"))]
+        if cfg.device == Device::Gpu {
+            return Err("this binary was built without the 'gpu' feature; use --device cpu".into());
+        }
+        Ok(Self {
+            #[cfg(feature = "gpu")]
+            ctx,
+            cfg, n_features: 0, base_score: 0.0, feat: Vec::new(), thr: Vec::new(),
             leafval: Vec::new(), encoders: Vec::new(), gmean: 0.0,
             fi_gain: Vec::new(), fi_count: Vec::new(), leafvar: Vec::new() })
     }
 
+    #[cfg(feature = "gpu")]
     fn gpu_ctx(&self) -> &Arc<CudaContext> {
         self.ctx.as_ref().expect("GPU context unavailable (device = cpu)")
     }
 
     /// Construct a booster that reuses an existing CUDA context (the `--serve` worker keeps
     /// one resident so the ~400 ms init is paid once, not per fit).
+    #[cfg(feature = "gpu")]
     pub fn with_ctx(cfg: Config, ctx: Arc<CudaContext>) -> Self {
         Self { ctx: Some(ctx), cfg, n_features: 0, base_score: 0.0, feat: Vec::new(),
             thr: Vec::new(), leafval: Vec::new(), encoders: Vec::new(), gmean: 0.0,
@@ -145,7 +170,14 @@ impl Booster {
         if self.cfg.device == Device::Cpu {
             return self.fit_cpu(ds);
         }
-        Ok(self.fit_inner(ds, false)?.total)
+        #[cfg(feature = "gpu")]
+        {
+            return Ok(self.fit_inner(ds, false)?.total);
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            Err("this binary was built without the 'gpu' feature; use --device cpu".into())
+        }
     }
 
     /// Host training path (no GPU). Mirrors `fit_inner`'s host prep, then builds the
@@ -181,10 +213,17 @@ impl Booster {
         Ok(t0.elapsed())
     }
 
+    #[cfg(feature = "gpu")]
     pub fn fit_profiled(&mut self, ds: &Dataset) -> Result<Profile, Err> {
         self.fit_inner(ds, true)
     }
 
+    #[cfg(not(feature = "gpu"))]
+    pub fn fit_profiled(&mut self, _ds: &Dataset) -> Result<Profile, Err> {
+        Err("profiling requires the 'gpu' feature".into())
+    }
+
+    #[cfg(feature = "gpu")]
     fn fit_inner(&mut self, ds: &Dataset, profile: bool) -> Result<Profile, Err> {
         let stream = self.gpu_ctx().default_stream();
         let module = kernels::load(self.gpu_ctx())?;
@@ -477,6 +516,7 @@ impl Booster {
         Ok(Profile { total, per_category_ns })
     }
 
+    #[allow(dead_code)]
     pub fn base_score(&self) -> f32 {
         self.base_score
     }
@@ -487,6 +527,7 @@ impl Booster {
     }
 
     /// Score `n` row-major rows. Returns `(raw_margins, gpu_inference_time)`.
+    #[cfg(feature = "gpu")]
     pub fn predict(&self, x: &[f32], n: usize) -> Result<(Vec<f32>, Duration), Err> {
         let stream = self.gpu_ctx().default_stream();
         let module = kernels::load(self.gpu_ctx())?;
@@ -514,6 +555,7 @@ impl Booster {
     }
 
     /// PGBM predictive standard deviation per row (sqrt of summed per-leaf variances).
+    #[cfg(feature = "gpu")]
     pub fn predict_std(&self, x: &[f32], n: usize) -> Result<Vec<f32>, Err> {
         let stream = self.gpu_ctx().default_stream();
         let module = kernels::load(self.gpu_ctx())?;
@@ -562,6 +604,7 @@ impl Booster {
     /// batch size, times `repeats` full predict calls (host->device copy of the batch,
     /// kernel, device->host copy of the result, completion sync) and returns the mean
     /// per-call nanoseconds. Per-row latency is `per_call / batch`.
+    #[cfg(feature = "gpu")]
     pub fn bench_latency(
         &self,
         x: &[f32],
@@ -607,6 +650,7 @@ impl Booster {
     /// (no per-call H2D — data resident), launch predict `repeats` times with spin-sync,
     /// and report mean ns/row. Stops at the first allocation that fails (VRAM ceiling).
     /// Returns `(rows, ns_per_row, ok)`.
+    #[cfg(feature = "gpu")]
     pub fn bench_throughput(&self, rows: &[usize], repeats: usize) -> Result<Vec<(usize, f64, bool)>, Err> {
         let stream = self.gpu_ctx().default_stream();
         let module = kernels::load(self.gpu_ctx())?;
@@ -659,6 +703,7 @@ impl Booster {
     ///   2. pinned host staging for faster, truly-async H2D/D2H,
     ///   3. **spin-sync**: busy-poll `cuStreamQuery` instead of a blocking
     ///      `cuStreamSynchronize`, trading a core for the lowest possible wakeup.
+    #[cfg(feature = "gpu")]
     pub fn bench_latency_fast(
         &self,
         x: &[f32],
@@ -825,7 +870,9 @@ impl Booster {
         cfg.cat_hash_buckets = cat_hash_buckets;
         cfg.device = Device::Cpu;
         Ok(Booster {
-            ctx: None, cfg, n_features, base_score, feat, thr, leafval, encoders, gmean,
+            #[cfg(feature = "gpu")]
+            ctx: None,
+            cfg, n_features, base_score, feat, thr, leafval, encoders, gmean,
             fi_gain: Vec::new(), fi_count: Vec::new(), leafvar: Vec::new(),
         })
     }
