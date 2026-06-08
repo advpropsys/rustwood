@@ -15,10 +15,15 @@ export CUDA_PATH="${CUDA_PATH:-/usr/local/cuda}"
 export CUDA_HOME="${CUDA_HOME:-$CUDA_PATH}"
 export CUDA_OXIDE_BACKEND="$OXIDE_REPO/crates/rustc-codegen-cuda/target/debug/librustc_codegen_cuda.so"
 
+# The codegen backend (librustc_codegen_cuda.so) is a one-time, slow build. It is its own
+# workspace with a pinned toolchain (rustc-dev + llvm-tools auto-install via rustup), and it
+# lands at exactly $CUDA_OXIDE_BACKEND. Build it here if absent so a fresh checkout just works.
 if [[ ! -f "$CUDA_OXIDE_BACKEND" ]]; then
-  echo "backend not found: $CUDA_OXIDE_BACKEND" >&2
-  echo "build it once with: (cd $OXIDE_REPO && cargo oxide doctor)" >&2
-  exit 1
+  echo "cuda-oxide backend not found — building it once (slow, ~10 min the first time)..." >&2
+  ( cd "$OXIDE_REPO/crates/rustc-codegen-cuda" && cargo build ) || {
+    echo "failed to build the cuda-oxide backend (need libclang-dev + CUDA toolkit)" >&2
+    exit 1
+  }
 fi
 
 cd "$HERE"
